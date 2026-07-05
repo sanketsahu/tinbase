@@ -2,7 +2,14 @@
 import type { DbEngine, EngineResults, EngineTx } from './engine.js'
 
 export async function createPgliteEngine(dataDir?: string): Promise<DbEngine> {
-  const { PGlite } = await import('@electric-sql/pglite')
+  let PGlite
+  try {
+    ;({ PGlite } = await import('@electric-sql/pglite'))
+  } catch {
+    throw new Error(
+      'the PGlite (wasm) engine is not available in this build — run with --engine native'
+    )
+  }
   const pg = dataDir ? new PGlite(dataDir) : new PGlite()
   await pg.waitReady
 

@@ -229,19 +229,17 @@ export class StorageHandler {
     let bytes: Uint8Array
 
     if (contentType.startsWith('multipart/form-data')) {
-      // storage-js wraps Blob/File bodies in FormData
-      const form = await req.formData()
-      let file: Blob | null = null
-      for (const [field, value] of form.entries()) {
-        if (typeof value === 'string') {
-          if (field === 'cacheControl') cacheControl = value
-        } else if (!file) {
-          file = value
-        }
-      }
-      if (!file) return storageError(400, 'invalid_request', 'no file found in multipart body')
-      bytes = new Uint8Array(await file.arrayBuffer())
-      contentType = file.type || 'application/octet-stream'
+      // storage-js wraps Blob/File bodies in FormData with an EMPTY field
+      // name, which some runtimes' formData() drops — parse bytes ourselves.
+      const boundary = contentType.match(/boundary="?([^";]+)"?/)?.[1]
+      if (!boundary) return storageError(400, 'invalid_request', 'multipart body without boundary')
+      const parts = parseMultipart(new Uint8Array(await req.arrayBuffer()), boundary)
+      const filePart = parts.find((p) => p.filename !== undefined || p.contentType !== undefined)
+      if (!filePart) return storageError(400, 'invalid_request', 'no file found in multipart body')
+      const cc = parts.find((p) => p.name === 'cacheControl')
+      if (cc) cacheControl = new TextDecoder().decode(cc.data)
+      bytes = filePart.data
+      contentType = filePart.contentType ?? 'application/octet-stream'
     } else {
       bytes = new Uint8Array(await req.arrayBuffer())
     }
@@ -573,6 +571,53 @@ function parseSizeLimit(v: number | string | null | undefined): number | null {
   if (!m) return null
   const mult = { b: 1, kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3 }[(m[2] ?? 'b').toLowerCase()]!
   return Math.floor(parseFloat(m[1]) * mult)
+}
+
+interface MultipartPart {
+  name: string
+  filename?: string
+  contentType?: string
+  data: Uint8Array
+}
+
+/** Minimal byte-safe multipart/form-data parser (works identically on Node, Bun, browsers). */
+export function parseMultipart(bytes: Uint8Array, boundary: string): MultipartPart[] {
+  const enc = new TextEncoder()
+  const dec = new TextDecoder()
+  const delim = enc.encode(`--${boundary}`)
+  const parts: MultipartPart[] = []
+
+  const indexOf = (needle: Uint8Array, from: number): number => {
+    outer: for (let i = from; i <= bytes.length - needle.length; i++) {
+      for (let j = 0; j < needle.length; j++) {
+        if (bytes[i + j] !== needle[j]) continue outer
+      }
+      return i
+    }
+    return -1
+  }
+
+  let pos = indexOf(delim, 0)
+  while (pos !== -1) {
+    const headerStart = pos + delim.length + 2 // skip \r\n (or "--" at the end)
+    if (bytes[pos + delim.length] === 0x2d && bytes[pos + delim.length + 1] === 0x2d) break
+    const headerEnd = indexOf(enc.encode('\r\n\r\n'), headerStart)
+    if (headerEnd === -1) break
+    const headerText = dec.decode(bytes.subarray(headerStart, headerEnd))
+    const next = indexOf(delim, headerEnd + 4)
+    if (next === -1) break
+    const data = bytes.subarray(headerEnd + 4, next - 2) // strip trailing \r\n
+
+    const disposition = headerText.match(/content-disposition:[^\r\n]*/i)?.[0] ?? ''
+    parts.push({
+      name: disposition.match(/[^a-z]name="([^"]*)"/i)?.[1] ?? '',
+      filename: disposition.match(/filename="([^"]*)"/i)?.[1],
+      contentType: headerText.match(/content-type:\s*([^\r\n;]+)/i)?.[1]?.trim(),
+      data: new Uint8Array(data),
+    })
+    pos = next
+  }
+  return parts
 }
 
 function likeEscape(s: string): string {

@@ -14,6 +14,11 @@ import { createNativeEngine } from './node/native/engine.js'
 import { FsStorageDriver } from './node/fs-driver.js'
 import { loadSupabaseProject } from './node/project.js'
 import { serve } from './node/server.js'
+import { serveBun } from './node/bun-server.js'
+
+const IS_BUN = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined'
+// single-file builds ship without the WASM engine; native is the default there
+const IS_BINARY = process.env.TINBASE_SINGLE_BINARY === '1'
 import { signJwt } from './jwt.js'
 import { DEFAULT_JWT_SECRET } from './types.js'
 
@@ -41,7 +46,7 @@ function parseArgs(argv: string[]): CliOptions {
     storageDir: '',
     jwtSecret: process.env.TINBASE_JWT_SECRET ?? DEFAULT_JWT_SECRET,
     memory: false,
-    engine: (process.env.TINBASE_ENGINE as 'wasm' | 'native') ?? 'wasm',
+    engine: (process.env.TINBASE_ENGINE as 'wasm' | 'native') ?? (IS_BINARY ? 'native' : 'wasm'),
   }
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -157,7 +162,9 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const server = await serve(backend, { port: opts.port, host: opts.host })
+  const server = IS_BUN
+    ? await serveBun(backend, { port: opts.port, host: opts.host })
+    : await serve(backend, { port: opts.port, host: opts.host })
   console.log(`
   tinbase running
 

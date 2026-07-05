@@ -65,6 +65,16 @@ tinbase keys       # print anon / service_role keys
 
 Both engines run the identical bootstrap, migrations, RLS, and realtime CDC - the test suite passes on both (`TINBASE_TEST_ENGINE=native npm test`).
 
+### Single-binary build (PocketBase-style)
+
+```bash
+npm run build:binary   # requires bun; emits dist-bin/tinbase (~57 MB)
+
+./tinbase start        # that's the whole deployment
+```
+
+One compiled executable, no Node or npm on the target machine. It defaults to the native engine (Postgres binaries auto-download on first run, 12 MB) and serves everything - REST, Auth, Storage, Realtime WebSockets - at 44 MB of RAM at boot. Runs under Bun's runtime via a Bun-native server (`Bun.serve` + built-in WebSockets); the same CLI on Node uses the node:http server.
+
 ## Embedding (Node or browser)
 
 ```ts
@@ -114,15 +124,15 @@ create policy "own rows" on todos
 
 Measured on an Apple Silicon Mac (48 GB), macOS 15. Same workload for all three: boot with one migrated table, then 1,000 single-row inserts followed by 1,000 filtered list queries. Memory is physical footprint (`vmmap`) for native processes and the sum of `docker stats` for containers. Reproduce with [`bench/footprint.ts`](bench/footprint.ts); raw numbers in [`bench/results.json`](bench/results.json).
 
-| | tinbase (native) | tinbase (wasm) | PocketBase v0.39.5 | Supabase local (CLI 2.40) |
-| --- | --- | --- | --- | --- |
-| Runtime memory at boot | 53 MB | 573 MB | 16 MB | 1,441 MB |
-| Runtime memory after workload | 96 MB | 347 MB¹ | 25 MB | 1,626 MB |
-| Data on disk (1k rows) | 38 MB | 39 MB | 7 MB | 70 MB |
-| Install size | 35 MB² | 26 MB² | 30 MB | 2,291 MB³ |
-| Processes | 2 (node + postgres) | 1 | 1 | 12 containers + Docker |
-| 1,000 inserts | 0.5 s | 0.8 s | 0.3 s | 1.1 s |
-| 1,000 filtered reads | 0.4 s | 0.8 s | 0.3 s | 1.0 s |
+| | tinbase (single binary) | tinbase (native, Node) | tinbase (wasm) | PocketBase v0.39.5 | Supabase local (CLI 2.40) |
+| --- | --- | --- | --- | --- | --- |
+| Runtime memory at boot | 44 MB | 53 MB | 573 MB | 16 MB | 1,441 MB |
+| Runtime memory after workload | 64 MB | 96 MB | 347 MB¹ | 25 MB | 1,626 MB |
+| Data on disk (1k rows) | 38 MB | 38 MB | 39 MB | 7 MB | 70 MB |
+| Install size | 92 MB (no runtime needed) | 35 MB² | 26 MB² | 30 MB | 2,291 MB³ |
+| Processes | 2 (tinbase + postgres) | 2 (node + postgres) | 1 | 1 | 12 containers + Docker |
+| 1,000 inserts | 0.4 s | 0.5 s | 0.8 s | 0.3 s | 1.1 s |
+| 1,000 filtered reads | 0.4 s | 0.4 s | 0.8 s | 0.3 s | 1.0 s |
 
 ¹ PGlite's WASM instantiation peaks at boot, then the OS reclaims pages; steady state under load is ~350 MB.
 ² Native: unpacked Postgres 17 binaries + `dist`. Wasm: `dist` + `@electric-sql/pglite`. Both exclude the Node runtime you already have.
@@ -131,7 +141,7 @@ Measured on an Apple Silicon Mac (48 GB), macOS 15. Same workload for all three:
 **How to read this honestly:**
 
 - **vs Supabase local**: same SDK, same APIs, ~15-27x less memory (native engine), ~65x smaller install, 2 processes instead of a 12-container stack, and boots in ~2 s instead of a minute. That's the entire point of the project.
-- **vs PocketBase**: with the native engine, tinbase lands in PocketBase's weight class - ~3x the RAM and install-size parity - while running *real Postgres* (RLS, jsonb, FKs, triggers) behind Supabase's exact wire APIs, so your code and migration files move to hosted Supabase unchanged. PocketBase is still the lightest option if you don't need any of that.
+- **vs PocketBase**: the single binary lands in PocketBase's weight class - ~2.5x the RAM, one downloadable file, no runtime prerequisite - while running *real Postgres* (RLS, jsonb, FKs, triggers) behind Supabase's exact wire APIs, so your code and migration files move to hosted Supabase unchanged. PocketBase is still the lightest option if you don't need any of that.
 - The wasm engine's memory is almost entirely the PGlite WASM heap; the API layers add single-digit MB. Use it where portability matters (browser, one-dependency installs); use `--engine native` on servers.
 
 ## How complete is it?

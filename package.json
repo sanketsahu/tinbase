@@ -20,7 +20,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts start",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:binary": "npm run build && bun build --compile src/cli.ts --outfile dist-bin/tinbase --external @electric-sql/pglite --define 'process.env.TINBASE_SINGLE_BINARY=\"1\"'"
   },
   "engines": {
     "node": ">=22"

@@ -6,3 +6,4 @@ dist/
 .supalite/
 bench/.tmp-*
 bench/pb_migrations/
+dist-bin/

@@ -42,5 +42,16 @@
     "readSecs": 0.429,
     "notes": "node server + embedded native postgres process tree; install = postgres binaries + dist (excludes Node runtime)",
     "measuredAt": "2026-07-05T15:34:48.482Z"
+  },
+  {
+    "target": "tinbase-binary",
+    "bootRssMb": 44.3,
+    "workloadRssMb": 64.2,
+    "dataDiskMb": 38.4,
+    "installDiskMb": 92,
+    "insertSecs": 0.404,
+    "readSecs": 0.358,
+    "notes": "single compiled executable (bun) + embedded postgres tree; install = binary + postgres binaries, NO runtime prerequisite",
+    "measuredAt": "2026-07-05T15:42:08.029Z"
   }
 ]

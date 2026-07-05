@@ -195,16 +195,18 @@ async function benchTinbase(): Promise<void> {
 
 // ── target: tinbase-native ─────────────────────────────────────────────────
 
-async function benchTinbaseNative(): Promise<void> {
-  const dir = join(import.meta.dirname, '.tmp-tinbase-native')
+async function benchTinbaseNative(binary?: string): Promise<void> {
+  const dir = join(import.meta.dirname, binary ? '.tmp-tinbase-binary' : '.tmp-tinbase-native')
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(join(dir, 'supabase', 'migrations'), { recursive: true })
   writeFileSync(join(dir, 'supabase', 'migrations', '20240101000000_bench.sql'), BENCH_TABLE_SQL)
 
-  const port = 54442
-  const proc = spawn('node', ['dist/cli.js', 'start', '--dir', dir, '--engine', 'native', '--port', String(port)], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  const port = binary ? 54443 : 54442
+  const proc = binary
+    ? spawn(binary, ['start', '--dir', dir, '--port', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    : spawn('node', ['dist/cli.js', 'start', '--dir', dir, '--engine', 'native', '--port', String(port)], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
   let banner = ''
   proc.stdout.on('data', (d) => (banner += d.toString()))
 
@@ -222,17 +224,19 @@ async function benchTinbaseNative(): Promise<void> {
     const dataDiskMb = duMb(join(dir, '.tinbase'))
     const { homedir } = await import('node:os')
     const cache = execSync(`ls -d ${homedir()}/.cache/tinbase/postgresql-* | head -1`).toString().trim()
-    const installDiskMb = duMb(cache) + duMb('dist')
+    const installDiskMb = binary ? duMb(binary) + duMb(cache) : duMb(cache) + duMb('dist')
 
     saveResult({
-      target: 'tinbase-native',
+      target: binary ? 'tinbase-binary' : 'tinbase-native',
       bootRssMb,
       workloadRssMb,
       dataDiskMb,
       installDiskMb,
       insertSecs,
       readSecs,
-      notes: 'node server + embedded native postgres process tree; install = postgres binaries + dist (excludes Node runtime)',
+      notes: binary
+        ? 'single compiled executable (bun) + embedded postgres tree; install = binary + postgres binaries, NO runtime prerequisite'
+        : 'node server + embedded native postgres process tree; install = postgres binaries + dist (excludes Node runtime)',
       measuredAt: new Date().toISOString(),
     })
   } finally {
@@ -429,6 +433,7 @@ async function benchSupabase(): Promise<void> {
 const target = process.argv[2]
 if (target === 'tinbase') await benchTinbase()
 else if (target === 'tinbase-native') await benchTinbaseNative()
+else if (target === 'tinbase-binary') await benchTinbaseNative(join(import.meta.dirname, '..', 'dist-bin', 'tinbase'))
 else if (target === 'pocketbase') await benchPocketbase()
 else if (target === 'supabase') await benchSupabase()
 else {
