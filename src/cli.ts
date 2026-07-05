@@ -39,7 +39,8 @@ function parseArgs(argv: string[]): CliOptions {
   const command = args[0] && !args[0].startsWith('-') ? args.shift()! : 'start'
   const opts: CliOptions = {
     command,
-    port: 54321,
+    // deploy platforms inject PORT; TINBASE_PORT wins if both are set
+    port: parseInt(process.env.TINBASE_PORT ?? process.env.PORT ?? '54321', 10),
     host: '127.0.0.1',
     dir: process.cwd(),
     dataDir: undefined,
@@ -91,7 +92,7 @@ Commands:
   keys       print anon and service_role keys
 
 Options:
-  -p, --port <n>        port to listen on (default 54321)
+  -p, --port <n>        port to listen on (default 54321; also TINBASE_PORT/PORT env)
       --host <host>     host to bind (default 127.0.0.1)
       --dir <path>      project directory containing supabase/ (default cwd)
       --data-dir <path> PGlite data directory (default <dir>/.tinbase/db)

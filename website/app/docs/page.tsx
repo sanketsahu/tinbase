@@ -77,7 +77,7 @@ tinbase migrate    # apply pending migrations and exit
 tinbase status     # list applied migrations
 tinbase keys       # print anon / service_role keys
 
-  -p, --port <n>        port (default 54321)
+  -p, --port <n>        port (default 54321; or TINBASE_PORT / PORT env)
       --dir <path>      project dir containing supabase/ (default cwd)
       --data-dir <path> data dir (default <dir>/.tinbase/db)
       --jwt-secret <s>  JWT secret (or TINBASE_JWT_SECRET)

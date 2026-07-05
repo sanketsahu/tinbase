@@ -1,0 +1,41 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: npm test
+      - name: Cross-compile single binaries
+        run: |
+          mkdir -p dist-bin
+          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            bun build --compile src/cli.ts \
+              --target=bun-$target \
+              --outfile dist-bin/tinbase-$target \
+              --external @electric-sql/pglite \
+              --define 'process.env.TINBASE_SINGLE_BINARY="1"'
+          done
+          cd dist-bin
+          for f in tinbase-*; do tar czf "$f.tar.gz" "$f"; done
+          shasum -a 256 *.tar.gz > checksums.txt
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-bin/*.tar.gz
+            dist-bin/checksums.txt
+          generate_release_notes: true
