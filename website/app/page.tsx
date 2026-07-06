@@ -177,7 +177,22 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-zinc-800/80 py-10">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 text-sm text-zinc-500">
+        <div className="mx-auto max-w-6xl space-y-6 px-6">
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-2 text-sm text-zinc-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
+              Related projects
+            </span>
+            <a href="https://lifo.sh" className="hover:text-zinc-300">
+              <span className="font-medium text-zinc-300">Lifo</span> — Linux APIs in the browser
+            </a>
+            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
+              Used by
+            </span>
+            <a href="https://rapidnative.com" className="hover:text-zinc-300">
+              <span className="font-medium text-zinc-300">RapidNative</span> — Expo apps, full-stack in the browser
+            </a>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-4 text-sm text-zinc-500">
           <span>
             Built by{' '}
             <a href="https://x.com/sanketsahu" className="font-medium text-zinc-300 hover:text-white">
@@ -205,6 +220,7 @@ export default function Home() {
             >
               <GitHubIcon />
             </a>
+          </div>
           </div>
         </div>
       </footer>
