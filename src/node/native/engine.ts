@@ -6,7 +6,7 @@
  * socket directory (0700), never TCP.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -73,21 +73,35 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
   // initdb on first boot
   if (!existsSync(join(opts.dataDir, 'PG_VERSION'))) {
     mkdirSync(opts.dataDir, { recursive: true })
-    execFileSync(bin('initdb'), ['-U', 'postgres', '-A', 'trust', '-E', 'UTF8', '-D', opts.dataDir], {
-      stdio: 'ignore',
-    })
+    try {
+      execFileSync(bin('initdb'), ['-U', 'postgres', '-A', 'trust', '-E', 'UTF8', '-D', opts.dataDir], {
+        stdio: 'pipe',
+      })
+    } catch (e) {
+      const stderr = (e as { stderr?: Buffer }).stderr?.toString() ?? ''
+      throw new Error(`initdb failed:\n${stderr || (e as Error).message}`)
+    }
     appendFileSync(join(opts.dataDir, 'postgresql.conf'), TUNED_CONF)
   }
 
-  // private socket dir — trust auth is safe because only this user can reach it
-  const sockDir = mkdtempSync(join(tmpdir(), 'tinbase-pg-'))
+  // A stale postmaster.pid (from a crashed run) makes postgres refuse to start.
+  // Remove it if the process it names is no longer alive.
+  removeStalePidFile(join(opts.dataDir, 'postmaster.pid'))
+
+  // private socket dir — trust auth is safe because only this user can reach it.
+  // Keep the path short: macOS caps unix socket paths at ~104 chars.
+  const sockDir = mkdtempSync(join(tmpdir(), 'tb-'))
   chmodSync(sockDir, 0o700)
 
   const child: ChildProcess = spawn(bin('postgres'), ['-D', opts.dataDir, '-k', sockDir], {
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
     detached: false,
   })
   let childExited = false
+  let stderr = ''
+  child.stderr?.on('data', (d: Buffer) => {
+    stderr = (stderr + d.toString()).slice(-4000)
+  })
   child.on('exit', () => (childExited = true))
 
   const socketPath = join(sockDir, '.s.PGSQL.5432')
@@ -97,7 +111,14 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
       try {
         return await PgWireClient.connect({ socketPath, user: 'postgres', database: 'postgres' })
       } catch (e) {
-        if (childExited) throw new Error('postgres exited during startup')
+        if (childExited) {
+          const detail = stderr.trim()
+          throw new Error(
+            `embedded postgres failed to start${detail ? `:\n${detail}` : ' (no output)'}\n\n` +
+              `data dir: ${opts.dataDir}\n` +
+              `If a previous run is still holding it, stop it; or delete the data dir to start fresh.`
+          )
+        }
         if (Date.now() > deadline) throw e
         await new Promise((r) => setTimeout(r, 150))
       }
@@ -169,6 +190,31 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
       }
       rmSync(sockDir, { recursive: true, force: true })
     },
+  }
+}
+
+/**
+ * Postgres refuses to boot if a postmaster.pid names a live process. When the
+ * previous run crashed the pid is stale; postgres usually clears it, but if the
+ * data dir moved or the boot ID differs it may not — remove it when the named
+ * pid is dead so a fresh start succeeds.
+ */
+function removeStalePidFile(pidPath: string): void {
+  if (!existsSync(pidPath)) return
+  try {
+    const pid = parseInt(readFileSync(pidPath, 'utf8').split('\n')[0]?.trim() ?? '', 10)
+    if (!pid) {
+      rmSync(pidPath, { force: true })
+      return
+    }
+    try {
+      process.kill(pid, 0) // throws if the process does not exist
+      // process is alive — leave the pid file; postgres will report the conflict
+    } catch {
+      rmSync(pidPath, { force: true })
+    }
+  } catch {
+    // unreadable pid file — let postgres decide
   }
 }
 
