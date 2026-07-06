@@ -69,6 +69,16 @@ create table if not exists auth.refresh_tokens (
 
 create index if not exists refresh_tokens_user_id_idx on auth.refresh_tokens(user_id);
 
+create table if not exists auth.one_time_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade,
+  email text not null,
+  token_type text not null, -- otp | magiclink | recovery
+  token text not null,
+  created_at timestamptz default now(),
+  expires_at timestamptz not null
+);
+
 grant usage on schema auth to anon, authenticated, service_role;
 
 create or replace function auth.jwt() returns jsonb

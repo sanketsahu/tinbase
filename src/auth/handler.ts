@@ -4,13 +4,14 @@
  */
 import type { Database } from '../db/database.js'
 import { randomToken, signJwt, verifyJwt, type JwtClaims } from '../jwt.js'
-import type { RequestContext } from '../types.js'
+import type { Mailer, RequestContext } from '../types.js'
 import { hashPassword, verifyPassword } from './password.js'
 
 export interface AuthConfig {
   jwtSecret: string
   siteUrl: string
   jwtExpiry: number
+  mailer: Mailer
 }
 
 interface UserRow {
@@ -71,10 +72,11 @@ export class AuthHandler {
       if (path === 'user' && method === 'GET') return await this.getUser(req)
       if (path === 'user' && method === 'PUT') return await this.updateUser(req)
       if (path === 'logout' && method === 'POST') return await this.logout(req)
-      if (['recover', 'otp', 'magiclink', 'resend'].includes(path) && method === 'POST') {
-        // no mail transport in tinbase — accept and no-op so flows don't crash
-        return json(200, {})
-      }
+      if (path === 'otp' && method === 'POST') return await this.sendOtp(req)
+      if (path === 'recover' && method === 'POST') return await this.sendRecovery(req)
+      if (['magiclink', 'resend'].includes(path) && method === 'POST') return await this.sendOtp(req)
+      if (path === 'verify' && method === 'POST') return await this.verifyToken(req)
+      if (path === 'verify' && method === 'GET') return await this.verifyLink(url)
       if (path.startsWith('admin/users')) return await this.admin(req, ctx, path, method)
       return authError(404, 'not_found', `unknown auth endpoint: ${path}`)
     } catch (e) {
@@ -209,6 +211,97 @@ export class AuthHandler {
       await this.db.query(`update auth.refresh_tokens set revoked = true where user_id = $1`, [user.id])
     }
     return new Response(null, { status: 204 })
+  }
+
+  // ── OTP / magic links / recovery ──────────────────────────────────────
+
+  private async issueToken(email: string, tokenType: 'otp' | 'recovery', createUser: boolean): Promise<Response> {
+    const normalized = email.toLowerCase().trim()
+    let res = await this.db.query(`select * from auth.users where email = $1`, [normalized])
+    let user = res.rows[0] as UserRow | undefined
+    if (!user) {
+      if (!createUser) return authError(422, 'otp_disabled', 'Signups not allowed for otp')
+      res = await this.db.query(
+        `insert into auth.users (aud, role, email, raw_app_meta_data, raw_user_meta_data)
+         values ('authenticated', 'authenticated', $1, '{"provider":"email","providers":["email"]}', '{}')
+         returning *`,
+        [normalized]
+      )
+      user = res.rows[0] as UserRow
+    }
+    const code = String(Math.floor(100000 + Math.random() * 900000))
+    const linkToken = randomToken(24)
+    await this.db.query(`delete from auth.one_time_tokens where email = $1 and token_type = $2`, [normalized, tokenType])
+    await this.db.query(
+      `insert into auth.one_time_tokens (user_id, email, token_type, token, expires_at)
+       values ($1, $2, $3, $4, now() + interval '15 minutes'), ($1, $2, $5, $6, now() + interval '15 minutes')`,
+      [user.id, normalized, tokenType, code, tokenType === 'otp' ? 'magiclink' : tokenType, linkToken]
+    )
+    const kind = tokenType === 'otp' ? 'magiclink' : tokenType
+    const link = `${this.config.siteUrl}/auth/v1/verify?token=${linkToken}&type=${kind}`
+    await this.config.mailer.send({
+      to: normalized,
+      subject: tokenType === 'otp' ? 'Your login code' : 'Reset your password',
+      text:
+        tokenType === 'otp'
+          ? `Your one-time code is ${code}\n\nOr sign in with this link: ${link}`
+          : `Reset your password with this link: ${link}\n\nOr use code ${code}`,
+    })
+    return json(200, {})
+  }
+
+  private async sendOtp(req: Request): Promise<Response> {
+    const body = (await req.json().catch(() => ({}))) as { email?: string; create_user?: boolean }
+    if (!body.email) return authError(400, 'validation_failed', 'email is required')
+    return this.issueToken(body.email, 'otp', body.create_user !== false)
+  }
+
+  private async sendRecovery(req: Request): Promise<Response> {
+    const body = (await req.json().catch(() => ({}))) as { email?: string }
+    if (!body.email) return authError(400, 'validation_failed', 'email is required')
+    return this.issueToken(body.email, 'recovery', false)
+  }
+
+  private async redeem(token: string, types: string[], email?: string): Promise<UserRow | null> {
+    const res = await this.db.query(
+      `delete from auth.one_time_tokens
+       where token = $1 and token_type = any($2::text[])
+         and ($3::text is null or email = $3) and expires_at > now()
+       returning user_id, email`,
+      [token, `{${types.join(',')}}`, email?.toLowerCase().trim() ?? null]
+    )
+    const row = res.rows[0] as { user_id: string; email: string } | undefined
+    if (!row) return null
+    await this.db.query(`delete from auth.one_time_tokens where email = $1`, [row.email])
+    const ures = await this.db.query(
+      `update auth.users set email_confirmed_at = coalesce(email_confirmed_at, now()), last_sign_in_at = now()
+       where id = $1 returning *`,
+      [row.user_id]
+    )
+    return (ures.rows[0] as UserRow) ?? null
+  }
+
+  private async verifyToken(req: Request): Promise<Response> {
+    const body = (await req.json().catch(() => ({}))) as { type?: string; email?: string; token?: string }
+    if (!body.token) return authError(400, 'validation_failed', 'token is required')
+    const types =
+      body.type === 'recovery' ? ['recovery'] : body.type === 'magiclink' ? ['magiclink'] : ['otp', 'magiclink', 'recovery']
+    const user = await this.redeem(body.token, types, body.email)
+    if (!user) return authError(403, 'otp_expired', 'Token has expired or is invalid')
+    return json(200, await this.sessionFor(user))
+  }
+
+  private async verifyLink(url: URL): Promise<Response> {
+    const token = url.searchParams.get('token') ?? ''
+    const type = url.searchParams.get('type') ?? 'magiclink'
+    const redirectTo = url.searchParams.get('redirect_to') ?? this.config.siteUrl
+    const user = await this.redeem(token, [type])
+    if (!user) {
+      return new Response(null, { status: 303, headers: { location: `${redirectTo}#error=access_denied&error_code=otp_expired` } })
+    }
+    const session = (await this.sessionFor(user)) as { access_token: string; refresh_token: string; expires_in: number }
+    const hash = `#access_token=${session.access_token}&refresh_token=${session.refresh_token}&expires_in=${session.expires_in}&token_type=bearer&type=${type}`
+    return new Response(null, { status: 303, headers: { location: `${redirectTo}${hash}` } })
   }
 
   // ── admin ─────────────────────────────────────────────────────────────

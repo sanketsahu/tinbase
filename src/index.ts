@@ -69,7 +69,13 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
   )
 
   const rest = new RestHandler(db)
-  const auth = new AuthHandler(db, { jwtSecret, siteUrl, jwtExpiry })
+  const mailer = config.mailer ?? {
+    async send(msg: { to: string; subject: string; text: string }) {
+      const log = config.log ?? console.log
+      log(`[mail] to=${msg.to} subject="${msg.subject}"\n${msg.text}`)
+    },
+  }
+  const auth = new AuthHandler(db, { jwtSecret, siteUrl, jwtExpiry, mailer })
   const storage = new StorageHandler(db, config.storageDriver ?? new MemoryStorageDriver(), { jwtSecret })
   const realtime = new RealtimeEngine(db)
   await realtime.start()
@@ -138,6 +144,10 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
       if (req.method === 'GET' || req.method === 'HEAD') {
         return withCors(await storage.handle(req, { role: 'anon', claims: null }, url))
       }
+    }
+    if (path === '/auth/v1/verify' && req.method === 'GET') {
+      // magic-link/recovery clicks arrive from email clients with no apikey
+      return withCors(await auth.handle(req, { role: 'anon', claims: null }, url))
     }
     if (path.startsWith('/auth/v1/')) {
       // GoTrue validates the apikey header, but user JWTs ride Authorization

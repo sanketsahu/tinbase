@@ -31,8 +31,21 @@ export interface BackendConfig {
   storageDriver?: StorageDriver
   /** Edge functions: name → fetch handler, served at /functions/v1/<name>. */
   functions?: Map<string, import('./functions/handler.js').EdgeFunction> | Record<string, import('./functions/handler.js').EdgeFunction>
+  /** Mail transport for OTP/magic-link/recovery emails. Default: console logger. */
+  mailer?: Mailer
   /** Print startup/debug logs. */
   log?: (msg: string) => void
+}
+
+export interface MailMessage {
+  to: string
+  subject: string
+  text: string
+}
+
+/** Pluggable mail transport. Default implementation logs to the console. */
+export interface Mailer {
+  send(msg: MailMessage): Promise<void>
 }
 
 export const DEFAULT_JWT_SECRET = 'super-secret-jwt-token-with-at-least-32-characters-long'
