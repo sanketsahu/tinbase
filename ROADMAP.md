@@ -48,7 +48,7 @@ Until the harness exists, coverage numbers below are our own honest estimates.
 | Realtime | ~85% | per-row DELETE RLS (WALRUS), private channels, broadcast-from-db |
 | Edge Functions | ~60% | Deno runtime compat, secrets |
 | Studio | basic | RLS policy editor, functions/triggers UI, logs |
-| Type generation | 0% | `gen types typescript` |
+| Type generation | ~85% | composite-type args, multi-schema output |
 | Extensions (pgvector, pg_cron, pg_net, pgmq) | partial/0% | vector search, cron, webhooks, queues |
 
 Typical CRUD + auth + storage + realtime app: **~90%** already works.
@@ -79,7 +79,7 @@ the "runs my real app" bar forward. Check items off as they land.
 - Target: Realtime ~70% → ~90%; closes a real security gap
 
 ### Phase 3 — Developer experience
-- [ ] `tinbase gen types typescript` from the live schema
+- [x] `tinbase gen types typescript` from the live schema
 - [ ] CLI parity: `db reset`, `db diff`, `db pull`, status/inspect
 - [ ] Studio: RLS policy editor, functions/triggers browser, logs pane
 - Target: match the daily-driver DX of the Supabase CLI + Studio

@@ -243,6 +243,7 @@ const supabase = createClient('http://localhost', backend.anonKey, {
                   ['Storage (storage-js)', '~80%', 'resumable uploads, image transforms'],
                   ['Realtime (realtime-js)', '~85%', 'per-row DELETE RLS, private channels'],
                   ['Edge Functions', '~60%', 'Deno runtime compat, import maps'],
+                  ['Type generation', '~85%', 'composite-type args, multi-schema'],
                 ].map(([m, c, g]) => (
                   <tr key={m} className="border-b border-zinc-800/60">
                     <td className="py-2 pr-4 text-zinc-200">{m}</td>

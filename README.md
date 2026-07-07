@@ -54,6 +54,7 @@ tinbase start      # boot the server (applies pending migrations first)
 tinbase migrate    # apply pending migrations and exit
 tinbase status     # list applied migrations
 tinbase keys       # print anon / service_role keys
+tinbase gen types  # print a TypeScript Database type for the schema
 
   -p, --port <n>        port (default 54321; or TINBASE_PORT / PORT env)
       --dir <path>      project dir containing supabase/ (default cwd)
@@ -142,6 +143,22 @@ It is a React app compiled to a single self-contained HTML file, so it also work
 ## Extensions
 
 The extensions Supabase enables by default are available out of the box, so migrations that call `uuid_generate_v4()`, `gen_random_uuid()`, `crypt()`, `citext`, `pg_trgm`, and friends just work: **uuid-ossp, pgcrypto, citext, pg_trgm, ltree, hstore, fuzzystrmatch**. They live in the `extensions` schema (like hosted Supabase) and are on the search path, so both qualified and unqualified calls resolve.
+
+## Typed clients
+
+Generate a Supabase-shaped `Database` type from the live schema, the same as `supabase gen types typescript`:
+
+```bash
+tinbase gen types typescript > database.types.ts
+```
+
+```ts
+import { createClient } from '@supabase/supabase-js'
+import type { Database } from './database.types'
+const supabase = createClient<Database>(url, anonKey)  // fully typed queries
+```
+
+Emits Tables (Row/Insert/Update/Relationships), Views, Functions, and Enums.
 
 ## Footprint: tinbase vs PocketBase vs Supabase local
 

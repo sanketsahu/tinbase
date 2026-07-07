@@ -25,6 +25,7 @@ export { MemoryStorageDriver } from './storage/driver.js'
 export { RealtimeEngine, type RealtimeSocketLike } from './realtime/engine.js'
 export { signJwt, verifyJwt, decodeJwt } from './jwt.js'
 export { FunctionsHandler, type EdgeFunction, type FunctionContext } from './functions/handler.js'
+export { generateTypes } from './gen-types.js'
 
 export interface TinbaseBackend {
   /** The whole backend as a fetch handler. Pass to supabase-js as global.fetch for in-process use. */

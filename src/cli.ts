@@ -9,7 +9,7 @@
  */
 import { mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { createBackend } from './index.js'
+import { createBackend, generateTypes } from './index.js'
 import { createNativeEngine } from './node/native/engine.js'
 import { FsStorageDriver } from './node/fs-driver.js'
 import { loadFunctions } from './node/load-functions.js'
@@ -72,6 +72,8 @@ function parseArgs(argv: string[]): CliOptions {
     else if (a === '--help' || a === '-h') {
       printHelp()
       process.exit(0)
+    } else if (!a.startsWith('-')) {
+      // positional (e.g. `gen types typescript`) — ignored, shape is fixed
     } else {
       console.error(`unknown option: ${a}`)
       process.exit(1)
@@ -92,6 +94,7 @@ Commands:
   migrate    apply pending supabase/migrations/*.sql and exit
   status     list applied migrations
   keys       print anon and service_role keys
+  gen types  print a TypeScript Database type for the current schema
 
 Options:
   -p, --port <n>        port to listen on (default 54321; also TINBASE_PORT/PORT env)
@@ -108,6 +111,19 @@ Options:
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2))
+
+  if (opts.command === 'gen') {
+    // `tinbase gen types [typescript]` — emit a Supabase-shaped Database type to stdout
+    const project = await loadSupabaseProject(opts.dir)
+    const backend = await createBackend({
+      migrations: project.migrations,
+      seedSql: project.seedSql,
+      jwtSecret: opts.jwtSecret,
+    })
+    process.stdout.write(await generateTypes(backend.db, 'public'))
+    await backend.close()
+    return
+  }
 
   if (opts.command === 'keys') {
     const now = Math.floor(Date.now() / 1000)
