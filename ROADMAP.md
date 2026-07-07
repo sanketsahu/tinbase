@@ -90,7 +90,7 @@ in the theseus native Postgres binaries or this PGlite build. Two tracks:
 - [ ] Bundle extension binaries (pgvector first) for native across platforms +
       a PGlite build that includes them — infra project, needed for true pgvector
 - [ ] tinbase-native automation that needs no C extension, works on both engines:
-      - [ ] database webhooks (CDC → HTTP) — replaces pg_net's http_post pattern
+      - [x] database webhooks (CDC → HTTP) — replaces pg_net's http_post pattern
       - [ ] scheduled jobs (in-process cron running SQL) — replaces pg_cron
       - [ ] table-backed queue helpers — replaces pgmq
 - Target: AI + automation apps run unchanged

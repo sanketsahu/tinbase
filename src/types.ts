@@ -37,6 +37,10 @@ export interface BackendConfig {
   oauthProviders?: Record<string, import('./auth/oauth.js').OAuthProviderConfig>
   /** Injectable fetch for OAuth provider calls (tests point this at a mock provider). */
   oauthFetch?: typeof fetch
+  /** Database webhooks: fire HTTP requests on table changes. */
+  webhooks?: import('./webhooks/service.js').WebhookConfig[]
+  /** Injectable fetch for webhook delivery (tests capture calls). */
+  webhookFetch?: typeof fetch
   /** Print startup/debug logs. */
   log?: (msg: string) => void
 }

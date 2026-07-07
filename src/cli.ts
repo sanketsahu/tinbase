@@ -8,6 +8,7 @@
  *   tinbase keys      print anon/service_role keys for the JWT secret
  */
 import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createBackend, generateTypes } from './index.js'
 import { computeDbDiff, shadowNativeDataDir } from './node/db-diff.js'
@@ -88,6 +89,17 @@ function parseArgs(argv: string[]): CliOptions {
   if (!opts.dataDir && !opts.memory) opts.dataDir = join(opts.dir, '.tinbase', 'db')
   if (!opts.storageDir) opts.storageDir = join(opts.dir, '.tinbase', 'storage')
   return opts
+}
+
+/** Optional webhooks config at supabase/webhooks.json: [{ table, events?, url, headers? }]. */
+function loadWebhooks(dir: string): import('./webhooks/service.js').WebhookConfig[] {
+  try {
+    const raw = readFileSync(join(dir, 'supabase', 'webhooks.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }
 
 function printHelp(): void {
@@ -214,6 +226,7 @@ async function main(): Promise<void> {
   const project = await loadSupabaseProject(opts.dir)
   const functions = await loadFunctions(opts.dir)
   const oauthProviders = loadOAuthProviders(opts.dir)
+  const webhooks = loadWebhooks(opts.dir)
   if (opts.dataDir) await mkdir(opts.dataDir, { recursive: true })
   await mkdir(opts.storageDir, { recursive: true })
 
@@ -234,6 +247,7 @@ async function main(): Promise<void> {
     seedSql: project.seedSql,
     functions,
     oauthProviders,
+    webhooks,
     storageDriver: new FsStorageDriver(opts.storageDir),
     log: (msg) => console.log(`  ${msg}`),
   })
@@ -272,6 +286,7 @@ async function main(): Promise<void> {
         Migrations: ${project.migrations.length} file(s)
          Functions: ${functions.size > 0 ? [...functions.keys()].join(', ') : 'none'}
     OAuth providers: ${Object.keys(oauthProviders).length ? Object.keys(oauthProviders).join(', ') : 'none'}
+          Webhooks: ${webhooks.length ? webhooks.map((w) => w.table).join(', ') : 'none'}
 
           anon key: ${backend.anonKey}
   service_role key: ${backend.serviceRoleKey}
