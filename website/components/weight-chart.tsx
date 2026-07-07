@@ -3,14 +3,18 @@
  * Weight chart — horizontal grouped bars, two series per engine: install
  * footprint and memory under load. Both series are megabytes on one LINEAR
  * axis (not a dual-axis — same unit), so the differences are real lengths you
- * compare by eye. Each row names the database behind it.
+ * compare by eye. Each row shows the engine's logo, name, and the database
+ * behind it.
  *
- * All engines are shown; the non-tinbase rows (PocketBase, Supabase) are muted
- * to grey so the tinbase engines carry the colour and the eye. The install/RAM
- * series stay legible on muted rows by position — install is always the upper
- * bar of the pair, RAM the lower.
+ * Non-tinbase rows (PocketBase, Supabase) are muted to grey so the tinbase
+ * engines carry the colour and the eye. The install/RAM series stay legible on
+ * muted rows by position — install is the upper bar of the pair, RAM the lower.
  *
- * The Supabase local stack (2,291 / 1,626 MB) is a 12-container Docker install,
+ * The two browser-based tinbase engines (pg-mem, wasm) are hidden behind a
+ * "Show browser-based options" toggle — the default view is the engines you'd
+ * deploy on a server, plus the competitors.
+ *
+ * The Supabase local stack (2,291 / 1,626 MB) is a 12-container Docker install
  * an order of magnitude past every single-process engine; on a linear axis it
  * would flatten everything else, so its bars are drawn CLIPPED (torn end) with
  * their true numbers. PocketBase is the smallest footprint but is SQLite behind
@@ -27,12 +31,12 @@ const INSTALL_MUTED = '#6b7280' // grey — install (competitors)
 const RAM_MUTED = '#4b5563' // darker grey — RAM (competitors)
 
 const DATA = [
-  { name: 'tinbase (pg-mem)', db: 'Postgres subset · in-memory', self: true, install: 3.6, ram: 185, note: 'pure JS, no WASM — lightest to ship; more RAM under load' },
-  { name: 'tinbase (wasm)', db: 'real Postgres · PGlite', self: true, install: 27, ram: 640, note: 'PGlite WASM — portable, heavy heap' },
-  { name: 'PocketBase', db: 'SQLite · different API', self: false, flag: true, install: 30, ram: 24, note: 'Go binary + SQLite · v0.39.5 — not supabase-js compatible' },
-  { name: 'tinbase (native)', db: 'real Postgres 17', self: true, install: 36, ram: 100, note: 'embedded native Postgres 17' },
-  { name: 'tinbase (binary)', db: 'real Postgres 17', self: true, install: 92, ram: 66, note: 'single executable, no runtime needed' },
-  { name: 'Supabase local', db: 'Postgres · 12 containers', self: false, install: 2291, ram: 1626, note: '12 Docker containers · CLI 2.40 — off the chart' },
+  { name: 'tinbase (pg-mem)', db: 'Postgres subset · in-memory', logo: '/logo.svg', self: true, browser: true, install: 3.6, ram: 185, note: 'pure JS, no WASM — lightest to ship; more RAM under load' },
+  { name: 'tinbase (wasm)', db: 'real Postgres · PGlite', logo: '/logo.svg', self: true, browser: true, install: 27, ram: 640, note: 'PGlite WASM — portable, heavy heap' },
+  { name: 'PocketBase', db: 'SQLite · different API', logo: '/pocketbase.svg', self: false, flag: true, install: 30, ram: 24, note: 'Go binary + SQLite · v0.39.5 — not supabase-js compatible' },
+  { name: 'tinbase (native)', db: 'real Postgres 17', logo: '/logo.svg', self: true, install: 36, ram: 100, note: 'embedded native Postgres 17' },
+  { name: 'tinbase (binary)', db: 'real Postgres 17', logo: '/logo.svg', self: true, install: 92, ram: 66, note: 'single executable, no runtime needed' },
+  { name: 'Supabase local', db: 'Postgres · 12 containers', logo: '/supabase.svg', self: false, install: 2291, ram: 1626, note: '12 Docker containers · CLI 2.40 — off the chart' },
 ]
 // Linear axis sized to the single-process engines; the Docker stack is clipped.
 // MAXW < 100 reserves room for the value label (and torn end) after each bar.
@@ -49,10 +53,12 @@ const barColor = (self: boolean, key: 'install' | 'ram') =>
 
 export function WeightChart() {
   const [hover, setHover] = useState<{ name: string; key: 'install' | 'ram' } | null>(null)
+  const [showBrowser, setShowBrowser] = useState(false)
+  const rowsData = showBrowser ? DATA : DATA.filter((d) => !d.browser)
 
   return (
     <figure aria-label="Install footprint and memory under load in megabytes, lower is better">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <figcaption className="text-sm font-medium text-zinc-400">
           Install footprint vs memory under load (MB) · lower is better
         </figcaption>
@@ -66,26 +72,47 @@ export function WeightChart() {
         </div>
       </div>
 
+      <button
+        type="button"
+        onClick={() => setShowBrowser((v) => !v)}
+        className="mb-4 inline-flex items-center gap-1 text-xs font-medium text-emerald-400 transition-colors hover:text-emerald-300"
+        aria-expanded={showBrowser}
+      >
+        {showBrowser ? 'Hide browser-based options' : 'Show browser-based options'}
+        <span aria-hidden="true" className={'transition-transform ' + (showBrowser ? 'rotate-180' : '')}>
+          ↓
+        </span>
+      </button>
+
       <div className="overflow-x-auto">
         <div className="min-w-[460px] space-y-4">
-          {DATA.map((d) => (
+          {rowsData.map((d) => (
             <div
               key={d.name}
-              className="grid grid-cols-[8.5rem_1fr] items-center gap-3 sm:grid-cols-[12rem_1fr]"
+              className="grid grid-cols-[9rem_1fr] items-center gap-3 sm:grid-cols-[12.5rem_1fr]"
             >
-              <div className="truncate text-right">
-                <div
-                  className={
-                    'truncate text-sm ' +
-                    (d.self ? 'font-semibold text-emerald-400' : 'text-zinc-500')
-                  }
-                >
-                  {d.name}
-                  {d.flag && <sup className="text-amber-400"> †</sup>}
+              <div className="flex items-center justify-end gap-2 text-right">
+                <div className="min-w-0">
+                  <div
+                    className={
+                      'truncate text-sm ' +
+                      (d.self ? 'font-semibold text-emerald-400' : 'text-zinc-500')
+                    }
+                  >
+                    {d.name}
+                    {d.flag && <sup className="text-amber-400"> †</sup>}
+                  </div>
+                  <div className={'truncate text-[11px] leading-tight ' + (d.self ? 'text-zinc-500' : 'text-zinc-600')}>
+                    {d.db}
+                  </div>
                 </div>
-                <div className={'truncate text-[11px] leading-tight ' + (d.self ? 'text-zinc-500' : 'text-zinc-600')}>
-                  {d.db}
-                </div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={d.logo}
+                  alt=""
+                  aria-hidden="true"
+                  className={'size-5 shrink-0 ' + (d.self ? '' : 'opacity-70')}
+                />
               </div>
 
               <div className="space-y-1">
@@ -149,9 +176,9 @@ export function WeightChart() {
         <span className="text-amber-400">†</span> PocketBase is the smallest footprint, but it is
         SQLite behind a different API — not a drop-in for supabase-js, unlike every tinbase engine.
         Linear scale; Supabase local (2,291 / 1,626 MB) is a 12-container Docker stack whose bars run
-        off the axis (torn end) so the single-process engines stay comparable. pg-mem trades runtime
-        RAM for the smallest real install: 3.6 MB, pure JS, no WASM. Physical footprint of the whole
-        process tree (vmmap / docker stats), Apple Silicon · macOS 15 ·{' '}
+        off the axis (torn end) so the single-process engines stay comparable.
+        {showBrowser && ' pg-mem and wasm run in the browser; pg-mem trades runtime RAM for the smallest real install (3.6 MB, pure JS, no WASM).'}{' '}
+        Physical footprint of the whole process tree (vmmap / docker stats), Apple Silicon · macOS 15 ·{' '}
         <a
           className="underline decoration-zinc-700 underline-offset-2 hover:text-zinc-300"
           href="https://github.com/sanketsahu/tinbase/blob/main/bench/footprint.ts"
