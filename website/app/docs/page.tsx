@@ -112,6 +112,8 @@ const supabase = createClient('http://127.0.0.1:54321', ANON_KEY)`}</Pre>
 tinbase migrate    # apply pending migrations and exit
 tinbase status     # list applied migrations
 tinbase keys       # print anon / service_role keys
+tinbase gen types  # emit a TypeScript Database type
+tinbase db reset   # wipe + re-run migrations and seed
 
   -p, --port <n>        port (default 54321; or TINBASE_PORT / PORT env)
       --dir <path>      project dir containing supabase/ (default cwd)

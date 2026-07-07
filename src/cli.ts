@@ -7,7 +7,7 @@
  *   tinbase status    show applied migrations
  *   tinbase keys      print anon/service_role keys for the JWT secret
  */
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createBackend, generateTypes } from './index.js'
 import { createNativeEngine } from './node/native/engine.js'
@@ -26,6 +26,8 @@ import { DEFAULT_JWT_SECRET } from './types.js'
 
 interface CliOptions {
   command: string
+  /** positional args after the command, e.g. `db reset` → ['reset'] */
+  positionals: string[]
   port: number
   host: string
   dir: string
@@ -41,6 +43,7 @@ function parseArgs(argv: string[]): CliOptions {
   const command = args[0] && !args[0].startsWith('-') ? args.shift()! : 'start'
   const opts: CliOptions = {
     command,
+    positionals: [],
     // deploy platforms inject PORT; TINBASE_PORT wins if both are set
     port: parseInt(process.env.TINBASE_PORT ?? process.env.PORT ?? '54321', 10),
     host: '127.0.0.1',
@@ -73,7 +76,7 @@ function parseArgs(argv: string[]): CliOptions {
       printHelp()
       process.exit(0)
     } else if (!a.startsWith('-')) {
-      // positional (e.g. `gen types typescript`) — ignored, shape is fixed
+      opts.positionals.push(a)
     } else {
       console.error(`unknown option: ${a}`)
       process.exit(1)
@@ -95,6 +98,7 @@ Commands:
   status     list applied migrations
   keys       print anon and service_role keys
   gen types  print a TypeScript Database type for the current schema
+  db reset   wipe the database + storage and re-run migrations and seed
 
 Options:
   -p, --port <n>        port to listen on (default 54321; also TINBASE_PORT/PORT env)
@@ -111,6 +115,41 @@ Options:
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2))
+
+  if (opts.command === 'db') {
+    const sub = opts.positionals[0]
+    if (sub !== 'reset') {
+      console.error(`unknown db subcommand: ${sub ?? '(none)'} (supported: reset)`)
+      process.exit(1)
+    }
+    // `tinbase db reset` — wipe data + storage and re-run migrations + seed fresh
+    const dataDir = opts.dataDir ?? join(opts.dir, '.tinbase', opts.engine === 'native' ? 'pgdata' : 'db')
+    const storageDir = opts.storageDir || join(opts.dir, '.tinbase', 'storage')
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(storageDir, { recursive: true, force: true })
+    console.log('  wiped database and storage')
+
+    const project = await loadSupabaseProject(opts.dir)
+    const engine =
+      opts.engine === 'native'
+        ? await createNativeEngine({ dataDir, log: (m) => console.log(`  ${m}`) })
+        : undefined
+    if (opts.engine !== 'native') await mkdir(dataDir, { recursive: true })
+    await mkdir(storageDir, { recursive: true })
+    const backend = await createBackend({
+      engine,
+      dataDir: opts.engine === 'native' ? undefined : dataDir,
+      jwtSecret: opts.jwtSecret,
+      migrations: project.migrations,
+      seedSql: project.seedSql,
+      storageDriver: new FsStorageDriver(storageDir),
+      log: (m) => console.log(`  ${m}`),
+    })
+    const applied = await backend.db.listAppliedMigrations()
+    console.log(`  reset complete — ${applied.length} migration(s) applied${project.seedSql ? ' + seed' : ''}`)
+    await backend.close()
+    return
+  }
 
   if (opts.command === 'gen') {
     // `tinbase gen types [typescript]` — emit a Supabase-shaped Database type to stdout

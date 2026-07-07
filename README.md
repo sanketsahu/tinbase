@@ -55,6 +55,7 @@ tinbase migrate    # apply pending migrations and exit
 tinbase status     # list applied migrations
 tinbase keys       # print anon / service_role keys
 tinbase gen types  # print a TypeScript Database type for the schema
+tinbase db reset   # wipe the database + storage, re-run migrations and seed
 
   -p, --port <n>        port (default 54321; or TINBASE_PORT / PORT env)
       --dir <path>      project dir containing supabase/ (default cwd)
