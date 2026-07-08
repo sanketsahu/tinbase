@@ -5,6 +5,7 @@
  * new migration.
  */
 import { mkdtempSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBackend, type TinbaseBackend } from '../index.js'
@@ -51,4 +52,63 @@ export async function computeDbDiff(opts: DbDiffOptions): Promise<string[]> {
 
 export function shadowNativeDataDir(): string {
   return join(mkdtempSync(join(tmpdir(), 'tinbase-shadow-')), 'pg')
+}
+
+export interface DbPullOptions extends DbDiffOptions {
+  /** directory to write the migration into (usually supabase/migrations); omit to skip writing */
+  migrationsDir?: string
+  /** migration name suffix (default 'remote_schema') */
+  name?: string
+  /** timestamp version prefix; pass for determinism (default: now as YYYYMMDDHHMMSS) */
+  stamp?: string
+}
+
+export interface DbPullResult {
+  ddl: string[]
+  version: string | null
+  path: string | null
+}
+
+/**
+ * `tinbase db pull` core: like `db diff`, but writes the delta as a migration
+ * AND records it as already-applied on the live database — the schema is
+ * already there, so a subsequent `tinbase start` must not re-run it. This is
+ * how you bring an out-of-migration (or externally-created) schema under
+ * version control.
+ */
+export async function pullSchema(opts: DbPullOptions): Promise<DbPullResult> {
+  const schema = opts.schema ?? 'public'
+  const shadow: TinbaseBackend = await createBackend({
+    engine: opts.makeShadowEngine ? await opts.makeShadowEngine() : undefined,
+    migrations: opts.migrations,
+  })
+  const live: TinbaseBackend = await createBackend({
+    engine: opts.liveEngine,
+    dataDir: opts.liveEngine ? undefined : opts.liveDataDir,
+    migrations: opts.migrations,
+  })
+  try {
+    const ddl = diffSchemas(await snapshotSchema(shadow.db, schema), await snapshotSchema(live.db, schema), schema)
+    if (ddl.length === 0) return { ddl, version: null, path: null }
+
+    const stamp = opts.stamp ?? new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+    const name = opts.name ?? 'remote_schema'
+    const body = ddl.join('\n\n') + '\n'
+    let path: string | null = null
+    if (opts.migrationsDir) {
+      await mkdir(opts.migrationsDir, { recursive: true })
+      path = join(opts.migrationsDir, `${stamp}_${name}.sql`)
+      await writeFile(path, body)
+    }
+    // record as already applied on the live DB so `start` won't re-run it
+    await live.db.query(
+      `insert into supabase_migrations.schema_migrations (version, name, statements)
+       values ($1, $2, $3) on conflict (version) do nothing`,
+      [stamp, `${stamp}_${name}`, [body]]
+    )
+    return { ddl, version: stamp, path }
+  } finally {
+    await shadow.close()
+    await live.close()
+  }
 }

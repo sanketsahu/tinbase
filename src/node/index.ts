@@ -7,4 +7,4 @@ export { createNativeEngine, ensurePostgres, type NativeEngineOptions } from './
 export { PgWireClient, PgWireError } from './native/wire.js'
 export { loadFunctions } from './load-functions.js'
 export { loadOAuthProviders } from './load-oauth.js'
-export { computeDbDiff, shadowNativeDataDir, type DbDiffOptions } from './db-diff.js'
+export { computeDbDiff, pullSchema, shadowNativeDataDir, type DbDiffOptions, type DbPullOptions, type DbPullResult } from './db-diff.js'

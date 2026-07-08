@@ -10,8 +10,8 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { createBackend, generateTypes, createPgmemEngine } from './index.js'
-import { computeDbDiff, shadowNativeDataDir } from './node/db-diff.js'
+import { createBackend, generateTypes, createPgmemEngine, inspectDb } from './index.js'
+import { computeDbDiff, pullSchema, shadowNativeDataDir } from './node/db-diff.js'
 import { createNativeEngine } from './node/native/engine.js'
 import { FsStorageDriver } from './node/fs-driver.js'
 import { loadFunctions } from './node/load-functions.js'
@@ -115,6 +115,8 @@ Commands:
   gen types  print a TypeScript Database type for the current schema
   db reset   wipe the database + storage and re-run migrations and seed
   db diff    print DDL for schema changes not yet in migrations (-f <name> to write a migration)
+  db pull    write the current schema delta as a migration and mark it applied ([name] optional)
+  inspect    per-table row counts and on-disk size
 
 Options:
   -p, --port <n>        port to listen on (default 54321; also TINBASE_PORT/PORT env)
@@ -164,10 +166,59 @@ async function main(): Promise<void> {
     return
   }
 
+  if (opts.command === 'db' && opts.positionals[0] === 'pull') {
+    // `tinbase db pull [name]` — write the current schema delta as a migration
+    // and record it as already applied (so `start` won't re-run it)
+    const project = await loadSupabaseProject(opts.dir)
+    const nativeLive =
+      opts.engine === 'native'
+        ? await createNativeEngine({ dataDir: join(opts.dir, '.tinbase', 'pgdata') })
+        : undefined
+    const res = await pullSchema({
+      liveEngine: nativeLive,
+      liveDataDir: opts.engine === 'native' ? undefined : join(opts.dir, '.tinbase', 'db'),
+      migrations: project.migrations,
+      makeShadowEngine:
+        opts.engine === 'native' ? () => createNativeEngine({ dataDir: shadowNativeDataDir() }) : undefined,
+      migrationsDir: join(opts.dir, 'supabase', 'migrations'),
+      name: opts.positionals[1] || 'remote_schema',
+    })
+    if (!res.path) {
+      console.error('No schema changes to pull.')
+      return
+    }
+    console.error(`Wrote ${res.path} and recorded it as applied (version ${res.version}).`)
+    return
+  }
+
+  if (opts.command === 'inspect') {
+    // `tinbase inspect` — per-table row counts and on-disk size
+    const project = await loadSupabaseProject(opts.dir)
+    const engine =
+      opts.engine === 'native' ? await createNativeEngine({ dataDir: join(opts.dir, '.tinbase', 'pgdata') }) : undefined
+    const backend = await createBackend({
+      engine,
+      dataDir: opts.engine === 'native' ? undefined : join(opts.dir, '.tinbase', 'db'),
+      migrations: project.migrations,
+    })
+    const rows = await inspectDb(backend.db, 'public')
+    if (rows.length === 0) {
+      console.log('No tables in schema "public".')
+    } else {
+      const pad = Math.max(5, ...rows.map((r) => r.table.length))
+      console.log(`${'table'.padEnd(pad)}  ${'rows'.padStart(10)}  size`)
+      for (const r of rows) {
+        console.log(`${r.table.padEnd(pad)}  ${String(r.rows).padStart(10)}  ${r.size}`)
+      }
+    }
+    await backend.close()
+    return
+  }
+
   if (opts.command === 'db') {
     const sub = opts.positionals[0]
     if (sub !== 'reset') {
-      console.error(`unknown db subcommand: ${sub ?? '(none)'} (supported: reset, diff)`)
+      console.error(`unknown db subcommand: ${sub ?? '(none)'} (supported: reset, diff, pull)`)
       process.exit(1)
     }
     // `tinbase db reset` — wipe data + storage and re-run migrations + seed fresh

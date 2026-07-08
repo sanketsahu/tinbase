@@ -37,6 +37,7 @@ export { installDenoShim, setDenoEnv } from './functions/deno-shim.js'
 export { WebhooksService, type WebhookConfig, type WebhookDelivery } from './webhooks/service.js'
 export { CronService, cronMatches } from './cron/service.js'
 export { snapshotSchema, diffSchemas, type SchemaSnapshot } from './db/schema-diff.js'
+export { inspectDb, type TableInfo } from './db/inspect.js'
 
 export interface TinbaseBackend {
   /** The whole backend as a fetch handler. Pass to supabase-js as global.fetch for in-process use. */
