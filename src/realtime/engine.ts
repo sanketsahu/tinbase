@@ -44,6 +44,10 @@ interface Channel {
   presenceEnabled: boolean
   /** subscriber auth (from the join's access_token), used to filter by RLS */
   ctx: RequestContext
+  /** private channel (RLS-authorized via realtime.messages) */
+  private: boolean
+  /** whether the subscriber passed the INSERT (write) authorization check */
+  canBroadcast: boolean
 }
 
 interface Connection {
@@ -62,6 +66,7 @@ export class RealtimeEngine {
   /** topic → key → metas */
   private presence = new Map<string, Map<string, PresenceMetas>>()
   private stopCdc: (() => void) | null = null
+  private stopDbBroadcast: (() => void) | null = null
 
   constructor(
     private db: Database,
@@ -77,14 +82,87 @@ export class RealtimeEngine {
     return { role, claims }
   }
 
+  /**
+   * Authorize a private channel against RLS on realtime.messages, as the
+   * subscriber. read = a SELECT policy lets them receive; write = an INSERT
+   * policy lets them broadcast. Runs in a transaction that always rolls back so
+   * the probe rows never persist.
+   */
+  private async authorizePrivate(subTopic: string, ctx: RequestContext): Promise<{ read: boolean; write: boolean }> {
+    const claims = ctx.claims ? JSON.stringify(ctx.claims) : ''
+    try {
+      return await this.db.engine.transaction(async (tx) => {
+        // seed a probe row for the topic with RLS bypassed (service_role)
+        await tx.query(`select set_config('role', 'service_role', true)`)
+        await tx.query(
+          `insert into realtime.messages (topic, extension, event, payload, private) values ($1, 'broadcast', 'authz', '{}'::jsonb, true)`,
+          [subTopic]
+        )
+        // become the subscriber and set the topic being authorized
+        await tx.query(
+          `select set_config('role', $1, true), set_config('request.jwt.claims', $2, true), set_config('realtime.topic', $3, true)`,
+          [ctx.role, claims, subTopic]
+        )
+        // read: does a SELECT policy let them see the probe row for this topic?
+        const rd = await tx.query<{ n: number }>(
+          `select count(*)::int as n from realtime.messages where topic = $1`,
+          [subTopic]
+        )
+        const read = ((rd.rows[0]?.n ?? 0) as number) > 0
+        // write: does an INSERT policy let them broadcast? (last query — a
+        // failure aborts the tx, which we roll back anyway)
+        let write = true
+        try {
+          await tx.query(
+            `insert into realtime.messages (topic, extension, event, payload, private) values ($1, 'broadcast', 'authz-w', '{}'::jsonb, true)`,
+            [subTopic]
+          )
+        } catch {
+          write = false
+        }
+        throw { __authz: { read, write } }
+      })
+    } catch (e) {
+      const authz = (e as { __authz?: { read: boolean; write: boolean } }).__authz
+      if (authz) return authz
+      // realtime schema missing / unexpected error → deny (safe default)
+      return { read: false, write: false }
+    }
+  }
+
+  /** Fan a realtime.send() database broadcast out to a topic's subscribers. */
+  private dispatchDbBroadcast(msg: { topic: string; event: string; payload: unknown }): void {
+    const full = `realtime:${msg.topic}`
+    for (const conn of this.connections) {
+      const channel = conn.channels.get(full) ?? conn.channels.get(msg.topic)
+      if (!channel) continue
+      this.send(conn, {
+        topic: channel.topic,
+        event: 'broadcast',
+        payload: { type: 'broadcast', event: msg.event, payload: msg.payload },
+        ref: null,
+      })
+    }
+  }
+
   async start(): Promise<void> {
     if (this.stopCdc) return
     this.stopCdc = await this.db.onCdcEvent((e) => this.dispatchCdc(e))
+    // broadcast-from-database: realtime.send() → pg_notify → fan out to topic
+    this.stopDbBroadcast = await this.db.engine.listen('tinbase_realtime_broadcast', (payload) => {
+      try {
+        this.dispatchDbBroadcast(JSON.parse(payload) as { topic: string; event: string; payload: unknown })
+      } catch {
+        // malformed payload — drop
+      }
+    })
   }
 
   stop(): void {
     this.stopCdc?.()
     this.stopCdc = null
+    this.stopDbBroadcast?.()
+    this.stopDbBroadcast = null
     for (const conn of this.connections) conn.socket.close(1001, 'server shutting down')
     this.connections.clear()
   }
@@ -188,9 +266,27 @@ export class RealtimeEngine {
 
   private async handleJoin(conn: Connection, msg: PhoenixMessage): Promise<void> {
     const config = (msg.payload?.config ?? {}) as {
+      private?: boolean
       broadcast?: { self?: boolean; ack?: boolean }
       presence?: { key?: string; enabled?: boolean }
       postgres_changes?: { event?: string; schema?: string; table?: string; filter?: string }[]
+    }
+
+    const ctx = await this.contextFromToken(msg.payload?.access_token as string | undefined)
+    const isPrivate = config.private === true
+    let canBroadcast = true
+    // Private channels are RLS-authorized against realtime.messages (skipped on
+    // subset engines with no RLS). No read policy → join is rejected.
+    if (isPrivate && !this.db.engine.minimalBootstrap) {
+      const sub = msg.topic.replace(/^realtime:/, '')
+      const authz = await this.authorizePrivate(sub, ctx)
+      if (!authz.read) {
+        this.reply(conn, msg, 'error', {
+          reason: `You do not have permissions to read from this Channel topic: ${sub}`,
+        })
+        return
+      }
+      canBroadcast = authz.write
     }
 
     const bindings: PostgresBinding[] = []
@@ -229,7 +325,9 @@ export class RealtimeEngine {
       broadcastAck: config.broadcast?.ack ?? false,
       presenceKey: config.presence?.key || crypto.randomUUID(),
       presenceEnabled: config.presence?.enabled ?? true,
-      ctx: await this.contextFromToken(msg.payload?.access_token as string | undefined),
+      ctx,
+      private: isPrivate,
+      canBroadcast,
     }
     conn.channels.set(msg.topic, channel)
 
@@ -327,6 +425,11 @@ export class RealtimeEngine {
   private handleBroadcast(conn: Connection, msg: PhoenixMessage): void {
     const sender = conn.channels.get(msg.topic)
     if (!sender) return
+    // private channels require INSERT (write) authorization to broadcast
+    if (sender.private && !sender.canBroadcast) {
+      if (sender.broadcastAck && msg.ref) this.reply(conn, msg, 'error', { reason: 'unauthorized' })
+      return
+    }
     const userPayload = (msg.payload as { payload?: unknown }).payload
     const binaryFrame =
       userPayload instanceof Uint8Array

@@ -45,7 +45,7 @@ Until the harness exists, coverage numbers below are our own honest estimates.
 | Database (PostgREST) | ~85% | aggregates in select, `.explain()`, `.csv()`, full spread embeds |
 | Auth (GoTrue) | ~90% | SSO, phone auth |
 | Storage | ~80% | image transforms, resumable (TUS) uploads |
-| Realtime | ~85% | per-row DELETE RLS (WALRUS), private channels, broadcast-from-db |
+| Realtime | ~90% | per-row DELETE RLS (WALRUS) |
 | Edge Functions | ~70% | npm:/jsr: import resolution, secrets |
 | Studio | ~70% | logs pane, table/column designer UI |
 | Type generation | ~85% | composite-type args, multi-schema output |
@@ -74,9 +74,9 @@ the "runs my real app" bar forward. Check items off as they land.
 
 ### Phase 2 — Realtime correctness
 - [x] RLS-filtered `postgres_changes` (INSERT/UPDATE by PK re-query; DELETE limited — see note)
-- [ ] Private channels with authorization
-- [ ] Broadcast-from-database
-- Target: Realtime ~70% → ~90%; closes a real security gap
+- [x] Private channels with authorization (RLS on realtime.messages via realtime.topic(); read=subscribe, write=broadcast)
+- [x] Broadcast-from-database (realtime.send(payload, event, topic, private) → topic subscribers)
+- Target: Realtime ~70% → ~90%; closes a real security gap ✓
 
 ### Phase 3 — Developer experience
 - [x] `tinbase gen types typescript` from the live schema

@@ -448,4 +448,49 @@ begin
   perform pg_notify('tinbase_cdc', payload);
   return coalesce(NEW, OLD);
 end $$;
+
+-- ── Realtime Authorization + broadcast-from-database ──────────────────────
+-- Mirrors Supabase Realtime: developers write RLS policies on
+-- realtime.messages using realtime.topic(); a SELECT policy grants a private
+-- channel's subscribers the right to *receive*, an INSERT policy the right to
+-- *broadcast*. realtime.send() lets the database push a broadcast to a topic.
+create schema if not exists realtime;
+
+create table if not exists realtime.messages (
+  id uuid not null default gen_random_uuid(),
+  topic text not null,
+  extension text not null,
+  event text,
+  payload jsonb,
+  private boolean default false,
+  inserted_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (id)
+);
+alter table realtime.messages enable row level security;
+
+grant usage on schema realtime to anon, authenticated, service_role;
+grant all on realtime.messages to anon, authenticated, service_role;
+
+-- the topic currently being authorized/broadcast (set per operation)
+create or replace function realtime.topic() returns text
+  language sql stable as $$ select nullif(current_setting('realtime.topic', true), '') $$;
+
+-- push a broadcast message to all subscribers of <topic> from SQL / triggers.
+-- Delivered over the websocket by the in-process realtime engine, which listens
+-- on the 'tinbase_realtime_broadcast' channel.
+create or replace function realtime.send(payload jsonb, event text, topic text, private boolean default true)
+  returns void language plpgsql security definer as $$
+begin
+  perform pg_notify(
+    'tinbase_realtime_broadcast',
+    json_build_object('topic', topic, 'event', event, 'payload', payload, 'private', private)::text
+  );
+exception when others then
+  -- never let a notify failure abort the caller's transaction
+  null;
+end $$;
+
+grant execute on function realtime.topic() to anon, authenticated, service_role;
+grant execute on function realtime.send(jsonb, text, text, boolean) to anon, authenticated, service_role;
 `
