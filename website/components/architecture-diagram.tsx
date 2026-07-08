@@ -60,7 +60,7 @@ export function ArchitectureDiagram() {
 
         {/* core → DbEngine adapter → engines (two distinct hops) */}
         <line x1="480" y1="322" x2="480" y2="340" stroke="#3f3f46" strokeWidth="1.5" markerEnd="url(#arrow)" />
-        <rect x="330" y="342" width="300" height="40" rx="8" fill="#0a0a0a" stroke="#27272a" />
+        <rect x="264" y="342" width="432" height="40" rx="8" fill="#0a0a0a" stroke="#27272a" />
         <text x="480" y="367" fill="#d4d4d8" fontSize="12.5" textAnchor="middle">
           <tspan fontFamily="ui-monospace, monospace" fill="#93c5fd">DbEngine</tspan> adapter · query · exec · transaction · listen
         </text>
