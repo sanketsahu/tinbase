@@ -75,7 +75,7 @@ export function WeightChart() {
       <button
         type="button"
         onClick={() => setShowBrowser((v) => !v)}
-        className="mb-4 inline-flex items-center gap-1 text-xs font-medium text-emerald-400 transition-colors hover:text-emerald-300"
+        className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-400 transition-colors hover:text-emerald-300"
         aria-expanded={showBrowser}
       >
         {showBrowser ? 'Hide browser-based options' : 'Show browser-based options'}
@@ -84,7 +84,9 @@ export function WeightChart() {
         </span>
       </button>
 
-      <div className="overflow-x-auto">
+      {/* pt-8 keeps the top row's upward hover tooltip from being clipped by
+          overflow-x-auto (which forces overflow-y to clip) */}
+      <div className="overflow-x-auto pt-8">
         <div className="min-w-[460px] space-y-4">
           {rowsData.map((d) => (
             <div

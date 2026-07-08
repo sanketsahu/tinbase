@@ -92,9 +92,8 @@ export default function Home() {
             The Supabase-compatible backend that fits in a <span className="text-emerald-400">tin</span>
           </h1>
           <p className="mt-6 max-w-2xl text-pretty text-lg text-zinc-400">
-            A Supabase-compatible backend in a single 57 MB binary — real Postgres with Row Level
-            Security, Auth, Storage, and Realtime. The official supabase-js SDK works unchanged.
-            No Docker.
+            Local Supabase dev without Docker — one process, real Postgres, and it even runs in the
+            browser. The official supabase-js SDK works unchanged.
           </p>
           <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
             <LinkButton href="/docs">Get started</LinkButton>
@@ -105,10 +104,6 @@ export default function Home() {
           <code className="mt-8 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-2.5 font-mono text-sm text-emerald-300">
             npx tinbase start
           </code>
-          <p className="mt-6 flex items-center gap-2 text-sm text-amber-400/90">
-            <span aria-hidden="true">⚠</span> Experimental — great for prototypes, local dev, and
-            embedded use. Not meant for production yet.
-          </p>
         </section>
 
         {/* benchmark */}
@@ -210,24 +205,23 @@ export default function Home() {
           <div className="mx-auto max-w-3xl text-center">
             <h2 className="text-3xl font-bold tracking-tight">Why tinbase exists</h2>
             <p className="mt-5 leading-relaxed text-zinc-400">
-              tinbase was built for{' '}
+              tinbase came out of{' '}
               <a href="https://lifo.sh" className="font-medium text-emerald-400 hover:text-emerald-300">
                 lifo
               </a>{' '}
-              — a project that maps Linux APIs into the browser — to let{' '}
-              <span className="text-zinc-200">Expo apps run fully in the browser with real
-              full-stack capability</span>: a database, auth, storage, and realtime, with no server
-              behind them. That is why every tinbase service is a pure fetch handler and the
-              database is Postgres compiled to WASM — the whole backend can live in-process,
-              inside a browser tab.
-            </p>
-            <p className="mt-4 leading-relaxed text-zinc-400">
-              It is part of{' '}
+              and{' '}
               <a href="https://rapidnative.com" className="font-medium text-emerald-400 hover:text-emerald-300">
                 RapidNative
-              </a>
-              . The same architecture turned out to make a great standalone local backend — so it is
-              open source for everyone.
+              </a>{' '}
+              with a hard goal: run an <span className="text-zinc-200">entire dev stack — database, auth,
+              storage, realtime — in the browser and on phones</span>, with no VMs and no cloud behind it.
+              The first step was cutting the memory overhead of running that backend locally at all; the
+              next was making the very same backend run in-process, inside a browser tab.
+            </p>
+            <p className="mt-4 leading-relaxed text-zinc-400">
+              That is why every service is a pure fetch handler and the database can be pure JavaScript.
+              Along the way it became something else too: a Docker-free, drop-in replacement for local
+              Supabase development that covers most use cases — so it is open source for everyone.
             </p>
           </div>
         </section>
