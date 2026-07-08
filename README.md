@@ -2,12 +2,12 @@
 
 # tinbase
 
-A pure-JS, Docker-free Supabase backend built on [PGlite](https://pglite.dev) (Postgres compiled to WASM). It speaks the same wire protocols as hosted Supabase, so the **official `@supabase/supabase-js` SDK works unchanged** - REST, Auth, Storage, and Realtime.
+Local Supabase dev without Docker — one process, real Postgres, and it even runs in the browser. It speaks the same wire protocols as hosted Supabase, so the **official `@supabase/supabase-js` SDK works unchanged** - REST, Auth, Storage, and Realtime.
 
-One command, one small binary, real Postgres with Row Level Security - and 1:1 with Supabase's APIs and migration conventions.
+A pure-JS backend built on [PGlite](https://pglite.dev) (Postgres compiled to WASM), with an embedded-native-Postgres and an ultralight pure-JS ([pg-mem](https://github.com/oguimbal/pg-mem)) engine too. One command, real Row Level Security, and 1:1 with Supabase's APIs and migration conventions.
 
 > [!WARNING]
-> **Experimental.** tinbase is young and moving fast - great for prototypes, local development, demos, and embedded/browser use. It is **not meant for production usage** yet.
+> **Alpha — not production-ready yet.** Great for local development, prototypes, and embedded/browser use.
 
 ```
 npx tinbase start

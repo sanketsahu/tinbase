@@ -65,32 +65,26 @@ export default function Docs() {
         <main className="min-w-0 max-w-3xl space-y-6">
           <h1 className="text-4xl font-bold tracking-tight">Documentation</h1>
 
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-            <strong className="font-semibold">Experimental.</strong> tinbase is young and moving
-            fast — great for prototypes, local development, demos, and embedded/browser use. It is
-            not meant for production usage yet.
-          </div>
-
           <H2 id="why">Why tinbase</H2>
           <P>
-            tinbase was built for{' '}
+            tinbase came out of{' '}
             <a className="text-emerald-400 hover:text-emerald-300" href="https://lifo.sh">
               lifo
             </a>{' '}
-            (lifo.sh) — a project that maps Linux APIs into the browser — to let Expo apps run fully
-            in the browser with full-stack capability: database, auth, storage, and realtime with no
-            server behind them. It is part of{' '}
+            and{' '}
             <a className="text-emerald-400 hover:text-emerald-300" href="https://rapidnative.com">
               RapidNative
-            </a>
-            .
+            </a>{' '}
+            with a hard goal: run an entire dev stack — database, auth, storage, realtime — in the
+            browser and on phones, with no VMs and no cloud behind it. The first step was cutting the
+            memory overhead of running that backend locally; the next was making the same backend run
+            in-process inside a browser tab.
           </P>
           <P>
-            That origin drives the architecture: every service is a pure{' '}
-            <code className={IC}>(Request) =&gt; Response</code> fetch handler and the default
-            engine is Postgres compiled to WASM, so the entire backend can run in-process inside a
-            browser tab — or as a tiny server on your machine. The same design turned out to make an
-            excellent standalone local Supabase replacement, so it is open source for everyone.
+            That is why every service is a pure <code className={IC}>(Request) =&gt; Response</code>{' '}
+            fetch handler and the database can be pure JavaScript. Along the way it became a
+            Docker-free, drop-in replacement for local Supabase development that covers most use cases
+            — so it is open source for everyone.
           </P>
 
           <H2 id="architecture">Architecture</H2>
