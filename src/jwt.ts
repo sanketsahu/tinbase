@@ -64,6 +64,10 @@ export async function verifyJwt(token: string, secret: string): Promise<JwtClaim
   if (parts.length !== 3) return null
   const [header, payload, signature] = parts
   try {
+    // Pin the algorithm to HS256 — reject alg:"none" and any alg-swap attempt
+    // rather than relying on the HMAC verify to fail.
+    const head = JSON.parse(decoder.decode(base64UrlToBytes(header))) as { alg?: string; typ?: string }
+    if (head.alg !== 'HS256') return null
     const key = await hmacKey(secret, 'verify')
     const valid = await crypto.subtle.verify(
       'HMAC',
