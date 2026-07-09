@@ -120,7 +120,10 @@ grant execute on all functions in schema pgmq to anon, authenticated, service_ro
 // ── cron (scheduled jobs) ────────────────────────────────────────────────────
 export const CRON_SQL = `
 create schema if not exists cron;
-grant usage on schema cron to service_role, authenticated;
+-- cron.schedule executes arbitrary SQL as the (superuser) function owner, so it
+-- must stay restricted to service_role — matching hosted Supabase, where
+-- authenticated cannot schedule jobs.
+grant usage on schema cron to service_role;
 
 create table if not exists cron.job (
   jobid bigint generated always as identity primary key,
@@ -175,7 +178,7 @@ begin
   return n > 0;
 end $cron$;
 
-grant execute on function cron.schedule(text,text,text), cron.schedule(text,text), cron.unschedule(text), cron.unschedule(bigint) to service_role, authenticated;
+grant execute on function cron.schedule(text,text,text), cron.schedule(text,text), cron.unschedule(text), cron.unschedule(bigint) to service_role;
 `
 
 // pg_net emulation — the `net.http_get/post/delete` SQL surface. The functions
@@ -186,7 +189,9 @@ grant execute on function cron.schedule(text,text,text), cron.schedule(text,text
 // Function — run unchanged, with no C extension on either engine.
 export const NET_SQL = `
 create schema if not exists net;
-grant usage on schema net to service_role, authenticated;
+-- net.http_* can reach arbitrary URLs from the server (SSRF surface), so keep it
+-- restricted to service_role like hosted Supabase — not authenticated.
+grant usage on schema net to service_role;
 
 create table if not exists net.http_request_queue (
   id bigint generated always as identity primary key,
@@ -208,7 +213,7 @@ create table if not exists net._http_response (
   error_msg text,
   created timestamptz not null default now()
 );
-grant select on net._http_response to service_role, authenticated;
+grant select on net._http_response to service_role;
 
 -- fold a jsonb param object into the URL as a query string (pg_net semantics)
 create or replace function net._merge_params(url text, params jsonb)
@@ -255,7 +260,7 @@ begin
   return req_id;
 end $net$;
 
-grant execute on function net.http_get(text,jsonb,jsonb,int), net.http_post(text,jsonb,jsonb,jsonb,int), net.http_delete(text,jsonb,jsonb,int) to service_role, authenticated;
+grant execute on function net.http_get(text,jsonb,jsonb,int), net.http_post(text,jsonb,jsonb,jsonb,int), net.http_delete(text,jsonb,jsonb,int) to service_role;
 `
 
 // Small pure-SQL stand-ins for contrib extensions Supabase migrations lean on

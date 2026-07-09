@@ -78,4 +78,14 @@ describe('pg_net emulation (net.http_*)', () => {
     expect(hits.length).toBeGreaterThanOrEqual(1)
     expect(JSON.parse(hits[0].body!)).toEqual({ from: 'cron' })
   }, 15000)
+
+  it('denies net.http_* and cron.schedule to the authenticated role', async () => {
+    const ctx = { role: 'authenticated', claims: { role: 'authenticated', sub: 'u1' } }
+    await expect(
+      backend.db.withContext(ctx, (q) => q(`select net.http_post('http://169.254.169.254/', '{}'::jsonb)`))
+    ).rejects.toThrow()
+    await expect(
+      backend.db.withContext(ctx, (q) => q(`select cron.schedule('evil', '1 seconds', 'select 1')`))
+    ).rejects.toThrow()
+  })
 })
