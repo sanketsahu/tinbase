@@ -83,6 +83,17 @@ describe('storage', () => {
     expect(res.headers.get('content-type')).toBe('image/png')
   })
 
+  it('forces active content types to download (stored-XSS guard)', async () => {
+    await env.supabase.storage
+      .from('avatars')
+      .upload('evil.html', new Blob(['<script>alert(1)</script>'], { type: 'text/html' }), { upsert: true })
+    const { data } = env.supabase.storage.from('avatars').getPublicUrl('evil.html')
+    const res = await env.backend.fetch(new Request(data.publicUrl))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('content-disposition')).toBe('attachment')
+  })
+
   it('denies public URL for private buckets', async () => {
     const { data } = env.supabase.storage.from('docs').getPublicUrl('root.txt')
     const res = await env.backend.fetch(new Request(data.publicUrl))

@@ -48,6 +48,18 @@ function iso(v: Date | string | null): string | null {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString()
 }
 
+/** Content types a browser will render and that can execute script in-origin. */
+function isRenderableActiveType(contentType: string): boolean {
+  const t = contentType.split(';')[0].trim().toLowerCase()
+  return (
+    t === 'text/html' ||
+    t === 'application/xhtml+xml' ||
+    t === 'image/svg+xml' ||
+    t === 'application/xml' ||
+    t === 'text/xml'
+  )
+}
+
 export class StorageHandler {
   constructor(
     private db: Database,
@@ -311,16 +323,20 @@ export class StorageHandler {
     const bytes = await this.driver.get(`${bucketId}/${key}`)
     if (bytes === null) return storageError(404, 'not_found', 'Object not found')
     const meta = row.metadata ?? {}
-    return new Response(head ? null : (bytes as BodyInit), {
-      status: 200,
-      headers: {
-        'content-type': String(meta.mimetype ?? 'application/octet-stream'),
-        'content-length': String(bytes.length),
-        'cache-control': String(meta.cacheControl ?? 'no-cache'),
-        etag: String(meta.eTag ?? '""'),
-        'last-modified': new Date(String(meta.lastModified ?? Date.now())).toUTCString(),
-      },
-    })
+    const contentType = String(meta.mimetype ?? 'application/octet-stream')
+    const headers: Record<string, string> = {
+      'content-type': contentType,
+      'content-length': String(bytes.length),
+      'cache-control': String(meta.cacheControl ?? 'no-cache'),
+      etag: String(meta.eTag ?? '""'),
+      'last-modified': new Date(String(meta.lastModified ?? Date.now())).toUTCString(),
+      // never let the browser sniff a different (executable) type
+      'x-content-type-options': 'nosniff',
+    }
+    // The content-type is attacker-controlled at upload time; force active
+    // content to download instead of rendering same-origin (stored-XSS guard).
+    if (isRenderableActiveType(contentType)) headers['content-disposition'] = 'attachment'
+    return new Response(head ? null : (bytes as BodyInit), { status: 200, headers })
   }
 
   private async removeObjects(req: Request, ctx: RequestContext, bucketId: string): Promise<Response> {
