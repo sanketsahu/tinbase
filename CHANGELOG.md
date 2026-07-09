@@ -4,6 +4,63 @@ All notable changes to tinbase are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow semver
 (pre-1.0, minor bumps may include breaking changes).
 
+## [0.7.0] — 2026-07-09
+
+Runs real Supabase projects. The headline is that a full production schema —
+[Cap-go/capgo](https://github.com/Cap-go/capgo)'s **335 migrations + an 80 KB
+seed** — now applies and is queryable via `@supabase/supabase-js` unchanged.
+Getting there added a pg_net emulation, made the native engine the default, and
+smoothed over the gaps between "stock Postgres" and a hosted Supabase project.
+**168 integration tests pass on both the wasm and native engines.**
+
+### Engines
+- **Native embedded Postgres 17 is now the default** on macOS/Linux (x64/arm64)
+  — ~59 MB RAM at boot vs PGlite's ~575–650 MB WASM heap. Windows still defaults
+  to the WASM (PGlite) engine, and `--engine` / `TINBASE_ENGINE` override as
+  before. The programmatic `createBackend()` default stays PGlite (browser-safe).
+  First native run downloads ~12 MB of Postgres binaries (cached).
+
+### Automation
+- **pg_net emulation** — `net.http_post` / `net.http_get` / `net.http_delete`
+  enqueue a request that an in-process worker sends, recording the reply in
+  `net._http_response` (like pg_net's background worker). So the common Supabase
+  pattern of a cron job hitting an Edge Function —
+  `cron.schedule(..., $$ select net.http_post(...) $$)` — works with no C
+  extension, on both engines.
+- **Cron now matches in UTC**, like hosted pg_cron (was the process-local
+  timezone).
+- **pgmq** gained `drop_queue`, `purge_queue`, and `list_queues`.
+
+### Real-project compatibility
+Applying a real project's migrations surfaced several stock-Postgres/hosted-only
+assumptions; each is now handled so the whole schema applies:
+- **`CREATE EXTENSION` tolerance** — an extension tinbase can't install
+  (pg_cron, pg_net, http, hypopg, supabase_vault, plpgsql_check, …) is skipped
+  with a notice instead of aborting the migration; bundled extensions still get
+  created.
+- **Per-migration `search_path`** — reset to the default before each migration
+  (the Supabase CLI applies each on a fresh connection), so a hardened file's
+  `SET search_path TO ''` can't break unqualified calls (e.g. `gen_random_bytes`)
+  in later files.
+- **`CREATE INDEX CONCURRENTLY`** is applied without `CONCURRENTLY` (illegal
+  inside tinbase's per-migration transaction; equivalent on a local dev DB).
+- **Supabase Vault** — `vault.secrets`, `vault.decrypted_secrets`,
+  `create_secret` / `update_secret` (dev-only plaintext; real Vault encrypts).
+- **`moddatetime`** — pure-SQL stand-in for the contrib trigger function.
+- **`auth.users`** gained the full GoTrue column set (instance_id,
+  confirmation_token, recovery_token, email_change*, phone_change*,
+  reauthentication*, …), so full-fidelity seed inserts work.
+
+### Docs & project
+- The repository moved to **github.com/tinbase/tinbase**.
+- Website: a browser-rendered OG image, a dark-only theme (no longer follows the
+  system light/dark preference), and refreshed engine/automation docs.
+- Roadmap: **Phase 7 — connect to an external Postgres** (a community request).
+
+### Notes
+- Native is macOS/Linux only; Windows uses the WASM engine.
+- Vault secrets are stored in cleartext locally — dev use only.
+
 ## [0.6.1] — 2026-07-08
 
 ### Fixed
@@ -76,6 +133,7 @@ Earlier tagged previews: the core Supabase-compatible surface — REST (PostgRES
 grammar), Auth (GoTrue), Storage, Realtime, RLS, migrations, and the single-file
 binary — on the PGlite (wasm) and native Postgres engines.
 
+[0.7.0]: https://github.com/tinbase/tinbase/releases/tag/v0.7.0
 [0.6.1]: https://github.com/tinbase/tinbase/releases/tag/v0.6.1
 [0.6.0]: https://github.com/tinbase/tinbase/releases/tag/v0.6.0
 [0.2.0]: https://github.com/tinbase/tinbase/releases/tag/v0.2.0
