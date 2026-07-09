@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createBackend, type TinbaseBackend } from '../src/index.js'
+import { blockedNetTarget } from '../src/net/service.js'
 
 interface Captured {
   url: string
@@ -78,6 +79,34 @@ describe('pg_net emulation (net.http_*)', () => {
     expect(hits.length).toBeGreaterThanOrEqual(1)
     expect(JSON.parse(hits[0].body!)).toEqual({ from: 'cron' })
   }, 15000)
+
+  it('blocks SSRF targets (metadata / loopback / private / scheme)', () => {
+    expect(blockedNetTarget('http://169.254.169.254/latest/meta-data/')).toBeTruthy()
+    expect(blockedNetTarget('http://127.0.0.1:8080/')).toBeTruthy()
+    expect(blockedNetTarget('http://localhost/')).toBeTruthy()
+    expect(blockedNetTarget('http://10.0.0.5/')).toBeTruthy()
+    expect(blockedNetTarget('http://192.168.1.1/')).toBeTruthy()
+    expect(blockedNetTarget('http://[::1]/')).toBeTruthy()
+    expect(blockedNetTarget('file:///etc/passwd')).toBeTruthy()
+    // public destinations are allowed
+    expect(blockedNetTarget('https://api.test/hook')).toBeNull()
+    expect(blockedNetTarget('http://93.184.216.34/')).toBeNull()
+  })
+
+  it('does not fetch a blocked target and records the error', async () => {
+    received.length = 0
+    const reqRes = await backend.db.query<{ id: number }>(
+      `select net.http_get('http://169.254.169.254/latest/meta-data/') as id`
+    )
+    const reqId = reqRes.rows[0].id
+    await wait()
+    expect(received.some((c) => c.url.includes('169.254.169.254'))).toBe(false)
+    const resp = await backend.db.query<{ error_msg: string | null }>(
+      `select error_msg from net._http_response where id = $1`,
+      [reqId]
+    )
+    expect(resp.rows[0]?.error_msg).toMatch(/blocked/)
+  })
 
   it('denies net.http_* and cron.schedule to the authenticated role', async () => {
     const ctx = { role: 'authenticated', claims: { role: 'authenticated', sub: 'u1' } }
