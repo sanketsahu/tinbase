@@ -59,6 +59,8 @@ export interface BackendConfig {
    * shows the full body regardless. Enable only for local debugging.
    */
   logMailBody?: boolean
+  /** Data-retention windows for the background cleanup sweep. */
+  retention?: import('./retention/service.js').RetentionConfig
 }
 
 export interface MailMessage {
