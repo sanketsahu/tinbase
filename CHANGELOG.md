@@ -4,6 +4,36 @@ All notable changes to tinbase are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow semver
 (pre-1.0, minor bumps may include breaking changes).
 
+## [0.8.0] — 2026-07-10
+
+The `pgmem` engine now runs real Supabase workloads. Backed by the
+[`@tinbase/pg-mem`](https://www.npmjs.com/package/@tinbase/pg-mem) fork, a full
+Supabase-style bootstrap + **135 production migrations** (rapidnative) apply
+**135/135 with nothing skipped** — 76 tables, inserts and Admin UI row edits working.
+
+### Changed
+- **`pgmem` engine dependency** is now `@tinbase/pg-mem` (via an npm alias, so
+  `import('pg-mem')` is unchanged). The fork adds the Postgres surface real projects
+  need — PL/pgSQL, triggers, RLS, correlated subqueries, `information_schema`
+  constraints, dollar-quoted strings, array slicing, MERGE, ranges, full-text and
+  declarative partitioning — none of which upstream `pg-mem@3.0.14` supports. It
+  transitively pulls `@tinbase/pgsql-ast-parser`. (Both are public/MIT and track
+  upstream PRs oguimbal/pg-mem#476 and oguimbal/pgsql-ast-parser#174.)
+- **`pgmem` statement splitter** now respects `--`/`/* */` comments and `'…'`/`"…"`
+  strings — it previously split on `;` inside them, the biggest source of spurious
+  migration failures.
+- **`pgmem` transaction errors** are no longer masked: pg-mem commits DDL immediately
+  and can't restore a snapshot afterwards, so the failed rollback is swallowed and the
+  real error surfaces.
+
+### Added
+- **`auth.uid()` / `auth.jwt()` / `auth.role()` / `auth.email()`** on the `pgmem`
+  engine, so migrations' RLS policies referencing them compile and RLS-protected tables
+  stay queryable/browsable.
+- **`pgmem` migrations are tolerant** — a migration the preview engine can't run is
+  skipped with a warning instead of aborting startup (local dev), and the Admin UI table
+  list tolerates a per-table count failure instead of blanking.
+
 ## [0.7.1] — 2026-07-09
 
 Docs/metadata accuracy pass after 0.7.0.
