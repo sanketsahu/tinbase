@@ -107,6 +107,13 @@ create table if not exists auth.audit_log_entries (
   ip_address varchar(64) not null default ''
 );
 
+-- runtime-mutable instance settings (Studio auth toggles)
+create table if not exists auth.config (
+  key text primary key,
+  value jsonb not null,
+  updated_at timestamptz default now()
+);
+
 create table if not exists storage.buckets (
   id text primary key,
   name text not null unique,
@@ -339,6 +346,13 @@ create table if not exists auth.audit_log_entries (
   ip_address varchar(64) not null default ''
 );
 create index if not exists audit_logs_instance_id_idx on auth.audit_log_entries(created_at);
+
+-- runtime-mutable instance settings (Studio auth toggles)
+create table if not exists auth.config (
+  key text primary key,
+  value jsonb not null,
+  updated_at timestamptz default now()
+);
 
 grant usage on schema auth to anon, authenticated, service_role;
 

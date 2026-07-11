@@ -22,6 +22,7 @@
   "scripts": {
     "build": "npm run build:admin && tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts start",
+    "db:reset": "tsx src/cli.ts db reset",
     "test": "vitest run",
     "test:watch": "vitest",
     "build:binary": "npm run build && bun build --compile src/cli.ts --outfile dist-bin/tinbase --external @electric-sql/pglite --define 'process.env.TINBASE_SINGLE_BINARY=\"1\"'",

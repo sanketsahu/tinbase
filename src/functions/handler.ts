@@ -7,6 +7,7 @@
  * modules that `export default` a fetch handler.
  */
 import type { RequestContext } from '../types.js'
+import { runWithDenoEnv } from './deno-shim.js'
 
 export type EdgeFunction = (req: Request, ctx: FunctionContext) => Response | Promise<Response>
 
@@ -47,7 +48,10 @@ export class FunctionsHandler {
       return json(404, { error: `function "${name}" not found` })
     }
     try {
-      const res = await fn(req, { auth: ctx, env: this.env })
+      // Bind Deno.env to this backend's function env for the call so a
+      // Deno.serve/Deno.env-style function reads its own secrets, not another
+      // backend's or the host process.env.
+      const res = await runWithDenoEnv(this.env, () => Promise.resolve(fn(req, { auth: ctx, env: this.env })))
       if (!(res instanceof Response)) {
         return json(500, { error: `function "${name}" did not return a Response` })
       }

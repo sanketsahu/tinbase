@@ -1,5 +1,6 @@
 import { writeFileSync, mkdtempSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -90,7 +91,9 @@ void p; void mood
       join(dir, 'tsconfig.json'),
       JSON.stringify({ compilerOptions: { strict: true, noEmit: true, skipLibCheck: true, moduleResolution: 'bundler', module: 'esnext', target: 'es2022' } })
     )
-    // tsc exits 0 only if the generated .d types check
-    execFileSync('npx', ['tsc', '-p', join(dir, 'tsconfig.json')], { stdio: 'pipe' })
+    // tsc exits 0 only if the generated .d types check. Run the local compiler
+    // through node directly — spawning the `npx` .cmd shim fails on Windows.
+    const tsc = createRequire(import.meta.url).resolve('typescript/lib/tsc.js')
+    execFileSync(process.execPath, [tsc, '-p', join(dir, 'tsconfig.json')], { stdio: 'pipe' })
   })
 })

@@ -20,6 +20,12 @@ export interface BackendConfig {
   /** Secret used to sign/verify every JWT. Defaults to the Supabase local-dev secret. */
   jwtSecret?: string
   /**
+   * Schemas exposed through the Data API (/rest/v1) for anon/authenticated —
+   * PostgREST's db-schemas. Requests profiling into any other schema get a 406
+   * unless made with the service_role key. Default: ['public'].
+   */
+  dbSchemas?: string[]
+  /**
    * Key used to encrypt Vault secrets at rest (pgcrypto). Held only in a session
    * GUC, never stored in the database. Defaults to a value derived from
    * jwtSecret; set a dedicated key in production.

@@ -116,8 +116,15 @@ async function main() {
     console.log(`  comparing normalized results against real supabase at ${url}\n`)
     const sb = clientsFor(url, anonKey, serviceKey)
     const sbResults = await runAll(sb.anon, sb.service, Math.random().toString(36).slice(2, 8))
+    // conformance is measured over scenarios that SHOULD match real supabase;
+    // documented tinbase-only deviations are reported but not counted against it
+    const comparable = SCENARIOS.filter((s) => !s.tinbaseOnly)
     let match = 0
     for (const s of SCENARIOS) {
+      if (s.tinbaseOnly) {
+        console.log(`  ~ [${s.module}] ${s.name} (tinbase-only, not compared)`)
+        continue
+      }
       const a = JSON.stringify(tbResults[s.name].normalized)
       const b = JSON.stringify(sbResults[s.name].normalized)
       const same = a === b
@@ -128,8 +135,8 @@ async function main() {
         console.log(`      supabase: ${b.slice(0, 200)}`)
       }
     }
-    console.log(`\n  CONFORMANCE: ${match}/${SCENARIOS.length} identical to real supabase\n`)
-    process.exit(match === SCENARIOS.length ? 0 : 1)
+    console.log(`\n  CONFORMANCE: ${match}/${comparable.length} identical to real supabase\n`)
+    process.exit(match === comparable.length ? 0 : 1)
   }
 
   process.exit(failed > 0 ? 1 : 0)

@@ -13,6 +13,12 @@ export interface Scenario {
   run: (ctx: ScenarioCtx) => Promise<unknown>
   /** Self-check on the normalized result; return true if it looks correct. */
   expect?: (result: any) => boolean
+  /**
+   * Documented, intentional deviation from real Supabase — excluded from the
+   * `--compare` conformance count (still self-scored). Use sparingly, and only
+   * for choices recorded in the scope section of the README/ROADMAP.
+   */
+  tinbaseOnly?: boolean
 }
 
 export interface ScenarioCtx {
@@ -86,6 +92,25 @@ export const SCENARIOS: Scenario[] = [
     module: 'rest',
     run: async ({ service }) => service.from('authors').insert({ name: 'dup', email: 'ada@example.com' }),
     expect: (r) => r.error?.code === '23505',
+  },
+
+  {
+    name: 'unexposed schema rejected for anon',
+    module: 'rest',
+    run: async ({ anon }) => anon.schema('auth' as any).from('users').select('id'),
+    // PostgREST db-schemas: anon can only reach exposed schemas (default: public)
+    expect: (r) => r.error?.code === 'PGRST106',
+  },
+  {
+    name: 'service_role bypasses schema allowlist',
+    module: 'rest',
+    // tinbase fuses pg-meta into REST, so the service_role key passes the schema
+    // profile gate that anon hits PGRST106 on (real PostgREST 406s everyone).
+    // Documented scope choice. Past the gate, normal grants still apply — so a
+    // grant-less table yields 42501, NOT the allowlist's PGRST106.
+    tinbaseOnly: true,
+    run: async ({ service }) => service.schema('storage' as any).from('buckets').select('id').limit(1),
+    expect: (r) => ok(r) && Array.isArray(r.data),
   },
 
   // ── RPC ──

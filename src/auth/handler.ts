@@ -8,6 +8,7 @@ import type { Mailer, RequestContext } from '../types.js'
 import { OAuthService, type OAuthProviderConfig } from './oauth.js'
 import { hashPassword, verifyPassword } from './password.js'
 import { qrSvgDataUri } from './qr.js'
+import { DEFAULT_AUTH_SETTINGS, type AuthSettings } from './settings.js'
 import { generateTotpSecret, otpauthUri, verifyTotp } from './totp.js'
 
 export interface AuthConfig {
@@ -18,6 +19,11 @@ export interface AuthConfig {
   oauthProviders?: Record<string, OAuthProviderConfig>
   /** injectable fetch for the OAuth provider calls (tests use a mock provider) */
   oauthFetch?: typeof fetch
+  /**
+   * Runtime-mutable toggles (signups, anonymous users, autoconfirm…). The
+   * admin API mutates this same object in place, so changes apply instantly.
+   */
+  settings?: AuthSettings
 }
 
 interface UserRow {
@@ -55,12 +61,15 @@ function iso(v: Date | string | null): string | null {
 
 export class AuthHandler {
   private oauth: OAuthService
+  /** Shared, runtime-mutable settings — read on every request, never copied. */
+  private settings: AuthSettings
 
   constructor(
     private db: Database,
     private config: AuthConfig
   ) {
     this.oauth = new OAuthService(db, config.siteUrl, config.oauthProviders ?? {}, config.oauthFetch ?? fetch)
+    this.settings = config.settings ?? { ...DEFAULT_AUTH_SETTINGS }
   }
 
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
@@ -70,11 +79,18 @@ export class AuthHandler {
     try {
       if (path === 'health') return json(200, { name: 'tinbase-auth', version: '0.1.0', description: 'GoTrue-compatible auth' })
       if (path === 'settings') {
+        const providers = Object.keys(this.config.oauthProviders ?? {})
         return json(200, {
-          external: { email: true, phone: false, anonymous_users: true },
-          disable_signup: false,
-          autoconfirm: true,
-          mailer_autoconfirm: true,
+          external: {
+            email: true,
+            phone: false,
+            anonymous_users: this.settings.anonymousUsers,
+            ...Object.fromEntries(providers.map((p) => [p, !this.settings.disabledProviders.includes(p)])),
+          },
+          disable_signup: this.settings.disableSignup,
+          autoconfirm: this.settings.autoconfirm,
+          mailer_autoconfirm: this.settings.autoconfirm,
+          minimum_password_length: this.settings.minPasswordLength,
         })
       }
       if (path === 'signup' && method === 'POST') return await this.signup(req)
@@ -94,7 +110,13 @@ export class AuthHandler {
         return await this.verifyFactor(req, path.split('/')[1])
       if (/^factors\/[^/]+$/.test(path) && method === 'DELETE')
         return await this.unenrollFactor(req, path.split('/')[1])
-      if (path === 'authorize' && method === 'GET') return await this.oauth.authorize(url)
+      if (path === 'authorize' && method === 'GET') {
+        const provider = url.searchParams.get('provider') ?? ''
+        if (provider && this.settings.disabledProviders.includes(provider)) {
+          return authError(422, 'provider_disabled', `Sign-ins with ${provider} are disabled`)
+        }
+        return await this.oauth.authorize(url)
+      }
       if (path === 'callback' && (method === 'GET' || method === 'POST')) {
         return await this.oauth.callback(url, (userId) => this.sessionTokensFor(userId))
       }
@@ -117,6 +139,9 @@ export class AuthHandler {
 
     if (!body.email && !body.password) {
       // supabase.auth.signInAnonymously()
+      if (!this.settings.anonymousUsers) {
+        return authError(422, 'anonymous_provider_disabled', 'Anonymous sign-ins are disabled')
+      }
       const res = await this.db.query(
         `insert into auth.users (aud, role, raw_app_meta_data, raw_user_meta_data, is_anonymous, last_sign_in_at)
          values ('authenticated', 'authenticated', '{}', $1, true, now())
@@ -126,11 +151,14 @@ export class AuthHandler {
       return json(200, await this.sessionFor(res.rows[0] as UserRow))
     }
 
+    if (this.settings.disableSignup) {
+      return authError(422, 'signup_disabled', 'Signups not allowed for this instance')
+    }
     if (!body.email || !body.password) {
       return authError(400, 'validation_failed', 'Signup requires a valid email and password')
     }
-    if (body.password.length < 6) {
-      return authError(422, 'weak_password', 'Password should be at least 6 characters.')
+    if (body.password.length < this.settings.minPasswordLength) {
+      return authError(422, 'weak_password', `Password should be at least ${this.settings.minPasswordLength} characters.`)
     }
     const email = body.email.toLowerCase().trim()
     const existing = await this.db.query(`select id from auth.users where email = $1`, [email])
@@ -138,17 +166,23 @@ export class AuthHandler {
       return authError(422, 'user_already_exists', 'User already registered')
     }
     const hashed = await hashPassword(body.password)
+    const autoconfirm = this.settings.autoconfirm
     const res = await this.db.query(
       `insert into auth.users
          (aud, role, email, encrypted_password, email_confirmed_at, last_sign_in_at,
           raw_app_meta_data, raw_user_meta_data)
-       values ('authenticated', 'authenticated', $1, $2, now(), now(),
+       values ('authenticated', 'authenticated', $1, $2, case when $4 then now() else null end, now(),
                '{"provider":"email","providers":["email"]}', $3)
        returning *`,
-      [email, hashed, JSON.stringify(body.data ?? {})]
+      [email, hashed, JSON.stringify(body.data ?? {}), autoconfirm]
     )
     const newUser = res.rows[0] as UserRow
     await this.audit('user_signedup', { actorId: newUser.id, actorEmail: email })
+    if (!autoconfirm) {
+      // confirmation required: email a verification link/code; no session yet
+      await this.issueToken(email, 'otp', false, 'confirm')
+      return json(200, this.userJson(newUser))
+    }
     return json(200, await this.sessionFor(newUser))
   }
 
@@ -163,6 +197,10 @@ export class AuthHandler {
       if (!user || !user.encrypted_password || !(await verifyPassword(body.password ?? '', user.encrypted_password))) {
         await this.audit('login_failed', { actorEmail: email, traits: { grant_type: 'password' } })
         return authError(400, 'invalid_credentials', 'Invalid login credentials')
+      }
+      // when confirmation is required, unverified accounts cannot sign in yet
+      if (!this.settings.autoconfirm && !user.email_confirmed_at) {
+        return authError(400, 'email_not_confirmed', 'Email not confirmed')
       }
       await this.db.query(`update auth.users set last_sign_in_at = now() where id = $1`, [user.id])
       await this.audit('login', { actorId: user.id, actorEmail: user.email, traits: { grant_type: 'password' } })
@@ -230,8 +268,8 @@ export class AuthHandler {
       sets.push(`email = $${params.length}, email_confirmed_at = now()`)
     }
     if (body.password) {
-      if (body.password.length < 6) {
-        return authError(422, 'weak_password', 'Password should be at least 6 characters.')
+      if (body.password.length < this.settings.minPasswordLength) {
+        return authError(422, 'weak_password', `Password should be at least ${this.settings.minPasswordLength} characters.`)
       }
       params.push(await hashPassword(body.password))
       sets.push(`encrypted_password = $${params.length}`)
@@ -274,12 +312,18 @@ export class AuthHandler {
 
   // ── OTP / magic links / recovery ──────────────────────────────────────
 
-  private async issueToken(email: string, tokenType: 'otp' | 'recovery', createUser: boolean): Promise<Response> {
+  private async issueToken(
+    email: string,
+    tokenType: 'otp' | 'recovery',
+    createUser: boolean,
+    flavor: 'login' | 'confirm' = 'login'
+  ): Promise<Response> {
     const normalized = email.toLowerCase().trim()
     let res = await this.db.query(`select * from auth.users where email = $1`, [normalized])
     let user = res.rows[0] as UserRow | undefined
     if (!user) {
       if (!createUser) return authError(422, 'otp_disabled', 'Signups not allowed for otp')
+      if (this.settings.disableSignup) return authError(422, 'signup_disabled', 'Signups not allowed for this instance')
       res = await this.db.query(
         `insert into auth.users (aud, role, email, raw_app_meta_data, raw_user_meta_data)
          values ('authenticated', 'authenticated', $1, '{"provider":"email","providers":["email"]}', '{}')
@@ -300,11 +344,13 @@ export class AuthHandler {
     const link = `${this.config.siteUrl}/auth/v1/verify?token=${linkToken}&type=${kind}`
     await this.config.mailer.send({
       to: normalized,
-      subject: tokenType === 'otp' ? 'Your login code' : 'Reset your password',
+      subject: tokenType === 'recovery' ? 'Reset your password' : flavor === 'confirm' ? 'Confirm your email' : 'Your login code',
       text:
-        tokenType === 'otp'
-          ? `Your one-time code is ${code}\n\nOr sign in with this link: ${link}`
-          : `Reset your password with this link: ${link}\n\nOr use code ${code}`,
+        tokenType === 'recovery'
+          ? `Reset your password with this link: ${link}\n\nOr use code ${code}`
+          : flavor === 'confirm'
+            ? `Confirm your email address with this link: ${link}\n\nOr enter the code ${code}`
+            : `Your one-time code is ${code}\n\nOr sign in with this link: ${link}`,
     })
     return json(200, {})
   }

@@ -27,7 +27,15 @@ function parsePrefer(header: string | null): Prefer {
 const OBJECT_MEDIA = 'application/vnd.pgrst.object+json'
 
 export class RestHandler {
-  constructor(private db: Database) {}
+  /** Schemas reachable through the Data API for non-privileged roles (PostgREST db-schemas). */
+  private exposedSchemas: string[]
+
+  constructor(
+    private db: Database,
+    opts?: { exposedSchemas?: string[] }
+  ) {
+    this.exposedSchemas = opts?.exposedSchemas ?? ['public']
+  }
 
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
     try {
@@ -39,6 +47,19 @@ export class RestHandler {
         (method === 'GET' || method === 'HEAD'
           ? req.headers.get('accept-profile')
           : req.headers.get('content-profile')) ?? 'public'
+
+      // PostgREST-style schema exposure: anon/authenticated can only profile
+      // into the configured schemas. The service_role key may reach any schema
+      // (grants still apply) — that's what powers cross-schema browsing in the
+      // studio, mirroring Supabase's privileged pg-meta connection.
+      if (!this.exposedSchemas.includes(schema) && ctx.role !== 'service_role') {
+        return jsonResponse(406, {
+          code: 'PGRST106',
+          message: `The schema must be one of the following: ${this.exposedSchemas.join(', ')}`,
+          details: null,
+          hint: null,
+        })
+      }
 
       if (rest.startsWith('rpc/')) {
         return await this.handleRpc(req, ctx, url, schema, decodeURIComponent(rest.slice(4)))

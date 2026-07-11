@@ -91,4 +91,58 @@ describe('admin', () => {
     expect(body.migrations).toBeGreaterThanOrEqual(1)
     expect(body.dbSize).toBeTruthy()
   })
+
+  it('adds, lists (with digest), and deletes edge-function secrets live', async () => {
+    // add two custom secrets
+    const put = await req('/admin/v1/edge-functions/secrets', backend.serviceRoleKey, {
+      method: 'PUT',
+      body: JSON.stringify({ secrets: { CLIENT_KEY: 'abc123', POLLER_SECRET: 'multi\nline' } }),
+    })
+    expect(put.status).toBe(200)
+
+    // GET exposes them with SHA256 digests and marks built-ins
+    const got = (await (await req('/admin/v1/edge-functions', backend.serviceRoleKey)).json()) as {
+      env: Record<string, string>
+      builtins: string[]
+      digests: Record<string, string>
+    }
+    expect(got.env.CLIENT_KEY).toBe('abc123')
+    expect(got.builtins).toContain('SUPABASE_URL')
+    expect(got.digests.CLIENT_KEY).toMatch(/^[0-9a-f]{64}$/)
+
+    // the value is now live in the running functionEnv
+    expect(backend.functions).toBeDefined()
+
+    // built-ins cannot be overwritten
+    const clobber = await req('/admin/v1/edge-functions/secrets', backend.serviceRoleKey, {
+      method: 'PUT',
+      body: JSON.stringify({ secrets: { SUPABASE_URL: 'evil' } }),
+    })
+    expect(clobber.status).toBe(400)
+
+    // invalid names rejected
+    const bad = await req('/admin/v1/edge-functions/secrets', backend.serviceRoleKey, {
+      method: 'PUT',
+      body: JSON.stringify({ secrets: { 'no-dashes': 'x' } }),
+    })
+    expect(bad.status).toBe(400)
+
+    // delete one, built-in delete forbidden
+    const del = await req('/admin/v1/edge-functions/secrets?name=CLIENT_KEY', backend.serviceRoleKey, { method: 'DELETE' })
+    expect(del.status).toBe(200)
+    const builtinDel = await req('/admin/v1/edge-functions/secrets?name=SUPABASE_URL', backend.serviceRoleKey, { method: 'DELETE' })
+    expect(builtinDel.status).toBe(400)
+
+    const after = (await (await req('/admin/v1/edge-functions', backend.serviceRoleKey)).json()) as { env: Record<string, string> }
+    expect(after.env.CLIENT_KEY).toBeUndefined()
+    expect(after.env.POLLER_SECRET).toBe('multi\nline')
+  })
+
+  it('rejects secret writes without the service_role key', async () => {
+    const res = await req('/admin/v1/edge-functions/secrets', backend.anonKey, {
+      method: 'PUT',
+      body: JSON.stringify({ secrets: { X: 'y' } }),
+    })
+    expect(res.status).toBe(403)
+  })
 })

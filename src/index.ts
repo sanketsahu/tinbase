@@ -11,9 +11,10 @@ import { AdminApi } from './admin/api.js'
 import { ADMIN_HTML } from './admin/ui.js'
 import { AuthHandler } from './auth/handler.js'
 import { InboxMailer } from './auth/inbox.js'
+import { loadAuthSettings } from './auth/settings.js'
 import { LogBuffer } from './log-buffer.js'
 import { FunctionsHandler, type EdgeFunction } from './functions/handler.js'
-import { installDenoShim, setDenoEnv } from './functions/deno-shim.js'
+import { installDenoShim } from './functions/deno-shim.js'
 import { Database } from './db/database.js'
 import { signJwt, verifyJwt } from './jwt.js'
 import { RealtimeEngine } from './realtime/engine.js'
@@ -37,7 +38,7 @@ export { RealtimeEngine, type RealtimeSocketLike } from './realtime/engine.js'
 export { signJwt, verifyJwt, decodeJwt } from './jwt.js'
 export { FunctionsHandler, type EdgeFunction, type FunctionContext } from './functions/handler.js'
 export { generateTypes } from './gen-types.js'
-export { installDenoShim, setDenoEnv } from './functions/deno-shim.js'
+export { installDenoShim } from './functions/deno-shim.js'
 export { WebhooksService, type WebhookConfig, type WebhookDelivery } from './webhooks/service.js'
 export { CronService, cronMatches } from './cron/service.js'
 export { NetService, type NetDelivery } from './net/service.js'
@@ -110,7 +111,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     jwtSecret
   )
 
-  const rest = new RestHandler(db)
+  const rest = new RestHandler(db, { exposedSchemas: config.dbSchemas })
   // With no custom mailer, capture auth emails in an in-memory inbox (viewable
   // at /inbox) and log a metadata-only line. A provided mailer takes over and no
   // inbox is mounted.
@@ -128,6 +129,9 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
         )
       )
   const mailer: Mailer = config.mailer ?? inbox!
+  // one shared runtime-settings object: the auth handler reads it per request,
+  // the admin API mutates it (Studio toggles) and persists it to auth.config
+  const authSettings = await loadAuthSettings(db)
   const auth = new AuthHandler(db, {
     jwtSecret,
     siteUrl,
@@ -135,6 +139,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     mailer,
     oauthProviders: config.oauthProviders,
     oauthFetch: config.oauthFetch,
+    settings: authSettings,
   })
   const storage = new StorageHandler(db, config.storageDriver ?? new MemoryStorageDriver(), { jwtSecret })
   const realtime = new RealtimeEngine(db, jwtSecret)
@@ -156,8 +161,6 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
   )
   net.start()
 
-  const admin = new AdminApi(db, logs)
-
   const fnMap =
     config.functions instanceof Map
       ? config.functions
@@ -168,9 +171,25 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
     ...(config.functionEnv ?? {}),
   }
-  // make these visible to Deno.serve-style functions via the shim's Deno.env
+
+  const admin = new AdminApi(
+    db,
+    logs,
+    { anonKey, jwtSecret },
+    {
+      edgeFunctions: [...fnMap.keys()],
+      oauthProviders: Object.keys(config.oauthProviders ?? {}),
+      inbox: inbox !== null,
+      webhooks: config.webhooks ?? [],
+      authSettings,
+      functionEnv: fnEnv,
+    }
+  )
+
+  // install the Deno global once per process; the shim's Deno.env is bound to
+  // this backend's fnEnv per-invocation by FunctionsHandler (so backends don't
+  // share env through the global).
   installDenoShim()
-  setDenoEnv(fnEnv)
   const functions = new FunctionsHandler(fnMap as Map<string, EdgeFunction>, fnEnv)
 
   async function resolveContext(req: Request, url: URL): Promise<RequestContext | Response> {
@@ -222,8 +241,14 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
       )
     }
 
-    if (path === '/_' || path === '/_/') {
-      return new Response(ADMIN_HTML, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
+    // studio SPA — serve the shell for every /_/* route so deep links work.
+    // no-cache: the whole app is inlined in this one document, so a stale
+    // cached copy means a stale studio — force revalidation on every load.
+    if (path === '/_' || path.startsWith('/_/')) {
+      return new Response(ADMIN_HTML, {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
+      })
     }
 
     // local email inbox (dev-only; mounted only when using the default mailer)
