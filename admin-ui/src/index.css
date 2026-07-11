@@ -1,40 +1,201 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
-@theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
-  --color-brand: #3ecf8e;
-  --color-brand-dim: #2a9d6f;
-}
+@custom-variant dark (&:is(.dark *));
+
+/* ── design tokens ─────────────────────────────────────────────────────────
+   Semantic tokens only — components never hardcode palette values. The dark
+   set mirrors the original studio palette exactly; light is its counterpart. */
 
 :root {
+  color-scheme: light;
+  --background: #fafafa;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --sidebar: #f4f4f5;
+  --sidebar-foreground: #52525b;
+  --primary: #059669;
+  --primary-foreground: #ffffff;
+  --brand: #059669;
+  --secondary: #f4f4f5;
+  --muted: #e4e4e7;
+  --muted-foreground: #52525b;
+  --accent: #e8e8ea;
+  --accent-foreground: #171717;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --warning: #b45309;
+  --info: #2563eb;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --field: #ffffff;
+  --code: #f4f4f5;
+  --selected: #d7f0e4;
+  --ring: #059669;
+  --radius: 0.5rem;
+}
+
+.dark {
   color-scheme: dark;
+  --background: #1c1c1c;
+  --foreground: #ededed;
+  --card: #191919;
+  --card-foreground: #ededed;
+  --popover: #232323;
+  --popover-foreground: #d4d4d4;
+  --sidebar: #171717;
+  --sidebar-foreground: #a3a3a3;
+  --primary: #059669;
+  --primary-foreground: #ffffff;
+  --brand: #3ecf8e;
+  --secondary: #171717;
+  --muted: #404040;
+  --muted-foreground: #a3a3a3;
+  --accent: #262626;
+  --accent-foreground: #ededed;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --warning: #fbbf24;
+  --info: #60a5fa;
+  --border: #262626;
+  --input: #404040;
+  --field: #171717;
+  --code: #141414;
+  --selected: #12271c;
+  --ring: #3ecf8e;
 }
 
-html,
-body,
-#root {
-  height: 100%;
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-brand: var(--brand);
+  --color-secondary: var(--secondary);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-field: var(--field);
+  --color-code: var(--code);
+  --color-selected: var(--selected);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
 }
 
-body {
-  margin: 0;
-  background: #1c1c1c;
-  color: #ededed;
-  font-size: 13px;
-  -webkit-font-smoothing: antialiased;
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
 }
 
-/* Studio-dense scrollbars */
+/* ── animations ── */
+@keyframes sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes sheet-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ── Ace — blend into the token palette (theme file is swapped per mode) ── */
+.ace_editor {
+  background: transparent !important;
+  line-height: 1.6 !important;
+}
+.ace_editor .ace_gutter {
+  background: transparent !important;
+  color: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+}
+.ace_editor .ace_gutter-active-line {
+  background: color-mix(in oklab, var(--accent) 60%, transparent) !important;
+}
+.ace_editor .ace_active-line {
+  background: color-mix(in oklab, var(--accent) 50%, transparent) !important;
+}
+.ace_editor .ace_selection {
+  background: color-mix(in oklab, var(--brand) 22%, transparent) !important;
+}
+.ace_editor .ace_cursor {
+  color: var(--foreground);
+}
+.ace_placeholder {
+  color: color-mix(in oklab, var(--muted-foreground) 60%, transparent) !important;
+  font-family: inherit !important;
+  padding: 0 !important;
+}
+
+/* ── Studio-dense scrollbars ── */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
+  background: var(--muted);
   border-radius: 6px;
-  border: 2px solid #1c1c1c;
+  border: 2px solid var(--background);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a4a4a;
+  background: var(--muted-foreground);
 }
