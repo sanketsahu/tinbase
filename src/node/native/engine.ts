@@ -11,9 +11,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { DbEngine, EngineResults, EngineTx } from '../../db/engine.js'
-import { Mutex } from '../../db/engine.js'
+import type { DbEngine } from '../../db/engine.js'
 import { PgWireClient } from './wire.js'
+import { buildWireEngine } from './wire-engine.js'
 
 const DEFAULT_PG_VERSION = '17.7.0'
 
@@ -155,56 +155,9 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
     }
   }
 
-  const main = await connect()
-  const listener = await connect()
-
-  const mutex = new Mutex()
-  const listeners = new Map<string, Set<(payload: string) => void>>()
-  listener.onNotification = (channel, payload) => {
-    for (const cb of listeners.get(channel) ?? []) cb(payload)
-  }
-
-  const tx: EngineTx = {
-    async query<T>(sql: string, params?: unknown[]): Promise<EngineResults<T>> {
-      const res = await main.query<T>(sql, normalizeParams(params))
-      return { rows: res.rows, affectedRows: res.affectedRows }
-    },
-    async exec(sql: string): Promise<void> {
-      await main.exec(sql)
-    },
-  }
-
-  return {
-    query<T>(sql: string, params?: unknown[]): Promise<EngineResults<T>> {
-      return mutex.run(() => tx.query<T>(sql, params))
-    },
-    exec(sql: string): Promise<void> {
-      return mutex.run(() => tx.exec(sql))
-    },
-    transaction<T>(fn: (t: EngineTx) => Promise<T>): Promise<T> {
-      return mutex.run(async () => {
-        await main.exec('begin')
-        try {
-          const result = await fn(tx)
-          await main.exec('commit')
-          return result
-        } catch (e) {
-          await main.exec('rollback').catch(() => {})
-          throw e
-        }
-      })
-    },
-    async listen(channel: string, cb: (payload: string) => void): Promise<() => void> {
-      if (!listeners.has(channel)) {
-        listeners.set(channel, new Set())
-        await listener.exec(`listen "${channel.replaceAll('"', '""')}"`)
-      }
-      listeners.get(channel)!.add(cb)
-      return () => listeners.get(channel)?.delete(cb)
-    },
-    async close(): Promise<void> {
-      await main.close().catch(() => {})
-      await listener.close().catch(() => {})
+  return buildWireEngine({
+    connect,
+    onClose: async () => {
       if (!childExited) {
         child.kill('SIGINT') // fast shutdown
         await new Promise<void>((resolve) => {
@@ -220,7 +173,7 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
       }
       rmSync(sockDir, { recursive: true, force: true })
     },
-  }
+  })
 }
 
 /**
@@ -248,24 +201,3 @@ function removeStalePidFile(pidPath: string): void {
   }
 }
 
-/** Match PGlite's param serialization: arrays → pg literals, objects → JSON. */
-function normalizeParams(params?: unknown[]): unknown[] | undefined {
-  return params?.map((p) => {
-    if (p === null || p === undefined) return null
-    if (Array.isArray(p)) return toPgArrayLiteral(p)
-    if (p instanceof Date) return p.toISOString()
-    if (typeof p === 'object') return JSON.stringify(p)
-    return p
-  })
-}
-
-function toPgArrayLiteral(arr: unknown[]): string {
-  const items = arr.map((el): string => {
-    if (el === null || el === undefined) return 'NULL'
-    if (Array.isArray(el)) return toPgArrayLiteral(el)
-    if (typeof el === 'number' || typeof el === 'boolean') return String(el)
-    const s = typeof el === 'object' ? JSON.stringify(el) : String(el)
-    return `"${s.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
-  })
-  return `{${items.join(',')}}`
-}
