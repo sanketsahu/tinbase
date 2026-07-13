@@ -38,11 +38,11 @@ The durable, objective measure (build this early — it makes every later phase 
 
 Until the harness exists, coverage numbers below are our own honest estimates.
 
-## Current state (v0.7.0)
+## Current state (v0.9.0)
 
 | Module | Coverage | Biggest gaps |
 | --- | --- | --- |
-| Database (PostgREST) | ~85% | aggregates in select, `.explain()`, `.csv()`, full spread embeds |
+| Database (PostgREST) | ~95% | aggregates *within embeds*; error-shape parity (harness) |
 | Auth (GoTrue) | ~90% | SSO, phone auth |
 | Storage | ~80% | image transforms, resumable (TUS) uploads |
 | Realtime | ~90% | per-row DELETE RLS (WALRUS) |
@@ -105,7 +105,9 @@ in the theseus native Postgres binaries or this PGlite build. Two tracks:
 
 ### Phase 6 — Storage & PostgREST fidelity edges
 - [ ] Storage image transformations; resumable (TUS) uploads
-- [ ] PostgREST aggregates-in-select, `.explain()`, `.csv()`, spread embeds
+- [x] PostgREST aggregates-in-select (`count()`/`sum()`/`avg()`/`max()`/`min()` +
+      implicit group by), `.explain()` (text/json plans), `.csv()`, and to-one /
+      to-many / m2m spread embeds — top-level aggregates only (not yet within embeds)
 - [ ] Error-shape matching verified by the parity harness
 
 ### Phase 7 — Connect to an external Postgres (community request)
