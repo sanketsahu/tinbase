@@ -3,7 +3,7 @@
  *
  * tinbase can't install C extensions (pg_cron, pg_net, http, supabase_vault,
  * hypopg, …) into the PGlite or embedded-native Postgres build, and several of
- * them are emulated in pure SQL instead (cron, pg_net, pgmq — see
+ * them are emulated in pure SQL instead (cron, pg_net, pgmq - see
  * db/emulated.ts). A real Supabase project's first migration typically runs a
  * batch of `CREATE EXTENSION` statements; on stock Postgres a missing one
  * aborts the whole migration with `extension "…" is not available`.
@@ -19,7 +19,7 @@
  * migration inside a transaction (for atomicity + rollback), and
  * `CREATE/DROP INDEX CONCURRENTLY` / `REINDEX … CONCURRENTLY` are illegal in a
  * transaction block. On a single-connection local dev database CONCURRENTLY
- * buys nothing over a plain index, so we drop the keyword — the resulting index
+ * buys nothing over a plain index, so we drop the keyword - the resulting index
  * is identical.
  *
  * The scan is quote/comment-aware so it never touches these keywords when they

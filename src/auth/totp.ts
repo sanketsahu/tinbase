@@ -1,5 +1,5 @@
 /**
- * TOTP (RFC 6238) for MFA — pure WebCrypto, no dependencies. GoTrue uses
+ * TOTP (RFC 6238) for MFA - pure WebCrypto, no dependencies. GoTrue uses
  * SHA-1, 6 digits, a 30-second period; we mirror that so any standard
  * authenticator app (Google Authenticator, 1Password, …) works against the
  * secret we hand out at enroll time.

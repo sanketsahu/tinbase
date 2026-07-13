@@ -13,34 +13,55 @@ import { quoteIdent } from '../db/database.js'
 import { verifyJwt } from '../jwt.js'
 import type { RequestContext } from '../types.js'
 
+/** The minimal socket surface the engine needs; any transport can supply it. */
 export interface RealtimeSocketLike {
+  /** send a text or binary frame to the client */
   send(data: string | Uint8Array): void
+  /** close the connection with an optional WebSocket close code/reason */
   close(code?: number, reason?: string): void
 }
 
+/** A decoded Phoenix channel message (normalized from either serializer version). */
 interface PhoenixMessage {
+  /** channel topic the message targets */
   topic: string
+  /** Phoenix event name, e.g. phx_join, heartbeat, broadcast, presence */
   event: string
+  /** event-specific payload object */
   payload: Record<string, unknown>
+  /** client message ref, echoed on the phx_reply; null for server-initiated pushes */
   ref: string | null
+  /** ref of the join that owns this message; present on the v2 array serializer */
   join_ref?: string | null
 }
 
 interface PostgresBinding {
+  /** server-assigned id echoed to the client so it can route matching events */
   id: number
+  /** change type to match: INSERT, UPDATE, DELETE, or `*` for all */
   event: string
+  /** schema to watch */
   schema: string
+  /** table to watch, or `*` for every table in the schema */
   table: string
+  /** optional `col=op.value` row filter (see {@link matchFilter}) */
   filter?: string
 }
 
 interface Channel {
+  /** Phoenix topic, e.g. `realtime:room-1` */
   topic: string
+  /** the join message's ref, echoed back on replies for this channel */
   joinRef: string | null
+  /** postgres_changes subscriptions requested on join */
   bindings: PostgresBinding[]
+  /** echo broadcasts back to the sender (config.broadcast.self) */
   broadcastSelf: boolean
+  /** ack a broadcast with a phx_reply (config.broadcast.ack) */
   broadcastAck: boolean
+  /** presence identity key; defaults to a random uuid when the client sends none */
   presenceKey: string
+  /** whether the client opted into presence tracking */
   presenceEnabled: boolean
   /** subscriber auth (from the join's access_token), used to filter by RLS */
   ctx: RequestContext
@@ -51,7 +72,9 @@ interface Channel {
 }
 
 interface Connection {
+  /** the underlying transport socket */
   socket: RealtimeSocketLike
+  /** channels this connection has joined, keyed by topic */
   channels: Map<string, Channel>
   /** Phoenix serializer version: "1.0.0" = JSON objects, "2.0.0" = JSON arrays */
   vsn: string
@@ -59,6 +82,7 @@ interface Connection {
 
 type PresenceMetas = { metas: Record<string, unknown>[] }
 
+/** Holds all live connections and fans database changes and broadcasts out to them. */
 export class RealtimeEngine {
   private connections = new Set<Connection>()
   private bindingCounter = 1
@@ -109,7 +133,7 @@ export class RealtimeEngine {
           [subTopic]
         )
         const read = ((rd.rows[0]?.n ?? 0) as number) > 0
-        // write: does an INSERT policy let them broadcast? (last query — a
+        // write: does an INSERT policy let them broadcast? (last query - a
         // failure aborts the tx, which we roll back anyway)
         let write = true
         try {
@@ -145,6 +169,7 @@ export class RealtimeEngine {
     }
   }
 
+  /** Wire up the CDC and database-broadcast listeners; idempotent once started. */
   async start(): Promise<void> {
     if (this.stopCdc) return
     this.stopCdc = await this.db.onCdcEvent((e) => this.dispatchCdc(e))
@@ -153,11 +178,12 @@ export class RealtimeEngine {
       try {
         this.dispatchDbBroadcast(JSON.parse(payload) as { topic: string; event: string; payload: unknown })
       } catch {
-        // malformed payload — drop
+        // malformed payload - drop
       }
     })
   }
 
+  /** Detach listeners and close every open socket (server shutdown). */
   stop(): void {
     this.stopCdc?.()
     this.stopCdc = null
@@ -238,7 +264,7 @@ export class RealtimeEngine {
 
     // A handler throwing (e.g. an engine error while resolving the join's
     // schema) must never become an unhandled rejection out of the floated
-    // onMessage call — reply with a Phoenix error and keep the socket alive.
+    // onMessage call - reply with a Phoenix error and keep the socket alive.
     try {
       switch (msg.event) {
         case 'phx_join':
@@ -412,7 +438,7 @@ export class RealtimeEngine {
     const ref = read(refLen)
     const topic = read(topicLen)
     const userEvent = read(eventLen)
-    read(metaLen) // metadata — not relayed
+    read(metaLen) // metadata - not relayed
     const payloadBytes = bytes.subarray(offset)
 
     const payload: Record<string, unknown> = {
@@ -524,12 +550,12 @@ export class RealtimeEngine {
         type: c.udtName,
       }))
     } catch {
-      // schema went away — still deliver the event without columns
+      // schema went away - still deliver the event without columns
     }
 
     // RLS: only deliver a change to a subscriber if their role/claims would let
     // them see the row. INSERT/UPDATE are re-checked by primary key as that
-    // subscriber; DELETE cannot be re-queried (the row is gone) — see note below.
+    // subscriber; DELETE cannot be re-queried (the row is gone) - see note below.
     const rlsTables = await this.db.getRlsTables(event.schema).catch(() => new Set<string>())
     const rlsEnabled = rlsTables.has(event.table)
     const pk = rlsEnabled ? (await this.db.getSchemaInfo(event.schema)).tables.get(event.table)?.primaryKey ?? [] : []
@@ -546,7 +572,7 @@ export class RealtimeEngine {
         // A DELETE on an RLS table can't be re-checked per row (the row is
         // gone), so we can't confirm this subscriber was allowed to see it.
         // Non-service subscribers therefore get only the primary key of the
-        // deleted row, never the full old_record — otherwise every other
+        // deleted row, never the full old_record - otherwise every other
         // tenant's deleted-row contents would leak. (service_role/bypassrls and
         // non-RLS tables still get the full old_record.)
         const redactOld =

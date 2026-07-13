@@ -1,5 +1,5 @@
 /**
- * tinbase — a pure-JS, Docker-free Supabase backend on PGlite that speaks
+ * tinbase - a pure-JS, Docker-free Supabase backend on PGlite that speaks
  * the same wire protocols as hosted Supabase, so the official supabase-js
  * SDK works unchanged.
  *
@@ -48,20 +48,34 @@ export { RetentionService, type RetentionConfig } from './retention/service.js'
 export { snapshotSchema, diffSchemas, type SchemaSnapshot } from './db/schema-diff.js'
 export { inspectDb, type TableInfo } from './db/inspect.js'
 
+/**
+ * A running tinbase backend. The one field a consumer always needs is
+ * {@link TinbaseBackend.fetch}; the rest expose the underlying services for
+ * advanced/embedded use (in-process realtime, manual migrations, log access).
+ * Returned by {@link createBackend}.
+ */
 export interface TinbaseBackend {
   /** The whole backend as a fetch handler. Pass to supabase-js as global.fetch for in-process use. */
   fetch: (req: Request) => Promise<Response>
+  /** The database engine wrapper - run raw SQL, inspect schema, apply migrations. */
   db: Database
+  /** Realtime (Postgres CDC → WebSocket) engine backing supabase.channel(). */
   realtime: RealtimeEngine
+  /** Edge-function registry/dispatcher backing supabase.functions.invoke(). */
   functions: FunctionsHandler
+  /** Database-webhook service (HTTP requests fired on row changes). */
   webhooks: WebhooksService
+  /** pg_cron emulation scheduler. */
   cron: CronService
+  /** pg_net emulation sender (net.http_* queue drain). */
   net: NetService
+  /** Background sweeper that purges expired tokens and aged-out audit rows. */
   retention: RetentionService
-  /** JWT for the anon role — use as supabase-js's supabaseKey. */
+  /** JWT for the anon role - use as supabase-js's supabaseKey. */
   anonKey: string
-  /** JWT for the service_role — bypasses RLS. */
+  /** JWT for the service_role - bypasses RLS. */
   serviceRoleKey: string
+  /** Secret used to sign/verify every JWT (the resolved value, incl. the default). */
   jwtSecret: string
   /** Recent server logs (also surfaced in the Studio Logs pane). */
   logs: LogBuffer
@@ -69,6 +83,7 @@ export interface TinbaseBackend {
   inbox: InboxMailer | null
   /** Apply additional migrations at runtime. */
   migrate: (migrations: MigrationFile[], seedSql?: string) => Promise<string[]>
+  /** Tear down every background service and close the database. Idempotent-safe to await once. */
   close: () => Promise<void>
 }
 
@@ -105,6 +120,21 @@ const CORS_HEADERS: Record<string, string> = {
   'access-control-max-age': '86400',
 }
 
+/**
+ * Build a running tinbase backend from {@link BackendConfig}. Wires the
+ * database, auth, storage, realtime, edge functions, and the background
+ * services (webhooks/cron/net/retention), mints the anon/service_role keys, and
+ * returns a {@link TinbaseBackend} whose `fetch` handles every Supabase wire
+ * route.
+ *
+ * All config is optional: with an empty config it boots an in-memory PGlite
+ * backend on the Supabase local-dev defaults. If any startup step throws (e.g. a
+ * failing migration), every handle opened so far is torn down before the error
+ * propagates, so a failed construction never leaks the engine or a timer.
+ *
+ * @throws Error from {@link assertSecretsSafe} when bound to a network-exposed
+ *   host with a weak/default JWT secret or a derived vault key.
+ */
 export async function createBackend(config: BackendConfig = {}): Promise<TinbaseBackend> {
   const jwtSecret = config.jwtSecret ?? DEFAULT_JWT_SECRET
   const siteUrl = config.siteUrl ?? 'http://localhost:54321'
@@ -133,7 +163,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
 
   // Anything created after the engine (a running native Postgres child, the
   // realtime LISTEN, background timers) must be torn down if a later step throws
-  // — e.g. a failing migration — so a construction error never leaks a handle.
+  // - e.g. a failing migration - so a construction error never leaks a handle.
   const cleanup: Array<() => void | Promise<void>> = []
   const failStartup = async (e: unknown): Promise<never> => {
     for (const fn of cleanup.reverse()) await Promise.resolve(fn()).catch(() => {})
@@ -163,7 +193,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
   // at /inbox) and log a metadata-only line. A provided mailer takes over and no
   // inbox is mounted.
   //
-  // The server log records only the recipient and subject — never the body,
+  // The server log records only the recipient and subject - never the body,
   // which carries OTP codes and magic links. Set logMailBody: true to also log
   // the full body for local debugging (the /inbox UI always shows it in full).
   const inbox = config.mailer
@@ -309,7 +339,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
       )
     }
 
-    // studio SPA — serve the shell for every /_/* route so deep links work.
+    // studio SPA - serve the shell for every /_/* route so deep links work.
     // no-cache forces revalidation (the whole app is inlined in this one
     // document); the ETag then lets an unchanged studio return 304 instead of
     // re-sending the full ~0.6 MB body. A strict CSP hardens the shell.
@@ -454,6 +484,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
   }
 }
 
+/** Add the permissive CORS headers to a response, leaving any already-set header untouched. */
 function withCors(res: Response): Response {
   for (const [k, v] of Object.entries(CORS_HEADERS)) {
     if (!res.headers.has(k)) res.headers.set(k, v)

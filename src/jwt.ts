@@ -1,6 +1,6 @@
 /**
  * Minimal HS256 JWT implementation on WebCrypto.
- * Works in Node (>=18) and browsers — no dependencies.
+ * Works in Node (>=18) and browsers - no dependencies.
  */
 
 const encoder = new TextEncoder()
@@ -34,6 +34,7 @@ async function hmacKey(secret: string, usage: KeyUsage): Promise<CryptoKey> {
   )
 }
 
+/** Standard + Supabase/GoTrue claims carried in an access token. Open-ended: any extra claims are preserved. */
 export interface JwtClaims {
   [key: string]: unknown
   sub?: string
@@ -49,6 +50,7 @@ export interface JwtClaims {
   amr?: { method: string; timestamp: number }[]
 }
 
+/** Sign claims as an HS256 JWT. */
 export async function signJwt(claims: JwtClaims, secret: string): Promise<string> {
   const header = bytesToBase64Url(encoder.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })))
   const payload = bytesToBase64Url(encoder.encode(JSON.stringify(claims)))
@@ -64,7 +66,7 @@ export async function verifyJwt(token: string, secret: string): Promise<JwtClaim
   if (parts.length !== 3) return null
   const [header, payload, signature] = parts
   try {
-    // Pin the algorithm to HS256 — reject alg:"none" and any alg-swap attempt
+    // Pin the algorithm to HS256 - reject alg:"none" and any alg-swap attempt
     // rather than relying on the HMAC verify to fail.
     const head = JSON.parse(decoder.decode(base64UrlToBytes(header))) as { alg?: string; typ?: string }
     if (head.alg !== 'HS256') return null
@@ -95,6 +97,7 @@ export function decodeJwt(token: string): JwtClaims | null {
   }
 }
 
+/** A URL-safe random token (base64url of `bytes` CSPRNG bytes). Used for refresh/one-time/link tokens. */
 export function randomToken(bytes = 32): string {
   const buf = new Uint8Array(bytes)
   crypto.getRandomValues(buf)

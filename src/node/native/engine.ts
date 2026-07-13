@@ -1,5 +1,5 @@
 /**
- * Native embedded Postgres engine — PocketBase-class footprint with real
+ * Native embedded Postgres engine - PocketBase-class footprint with real
  * Postgres semantics. Downloads platform binaries once (~12 MB from
  * theseus-rs/postgresql-binaries), runs initdb with memory-lean settings,
  * and manages the postgres child process. Trust auth over a private unix
@@ -17,6 +17,7 @@ import { PgWireClient } from './wire.js'
 
 const DEFAULT_PG_VERSION = '17.7.0'
 
+/** Options for {@link createNativeEngine}. */
 export interface NativeEngineOptions {
   /** Postgres data directory (created + initdb'd if missing). */
   dataDir: string
@@ -24,6 +25,7 @@ export interface NativeEngineOptions {
   version?: string
   /** Where downloaded binaries are cached. Default ~/.cache/tinbase */
   cacheDir?: string
+  /** sink for progress lines (download, install); no-op when omitted */
   log?: (msg: string) => void
 }
 
@@ -66,7 +68,7 @@ async function verifyTarball(tarball: string, key: string, url: string): Promise
     }
     return
   }
-  // No local pin — verify against the checksum the release publishes.
+  // No local pin - verify against the checksum the release publishes.
   const res = await fetch(`${url}.sha256`)
   if (!res.ok) throw new Error(`could not fetch checksum for ${key}: HTTP ${res.status}`)
   const expected = (await res.text()).trim().split(/\s+/)[0].toLowerCase()
@@ -85,7 +87,7 @@ export async function ensurePostgres(version = DEFAULT_PG_VERSION, cacheDir?: st
 
   // Concurrency-safe: multiple test workers / processes may call this at once on
   // a cold cache. Each downloads + extracts to unique temp paths, then atomically
-  // renames into place — so no worker ever sees a half-written tarball or a
+  // renames into place - so no worker ever sees a half-written tarball or a
   // partially-extracted install dir.
   const url = `https://github.com/theseus-rs/postgresql-binaries/releases/download/${version}/postgresql-${version}-${t}.tar.gz`
   mkdirSync(root, { recursive: true })
@@ -134,6 +136,11 @@ synchronous_commit = off
 logging_collector = off
 `
 
+/**
+ * Boot the embedded Postgres child (initdb on first run) and return a {@link DbEngine}
+ * backed by two wire connections: one for queries/transactions (serialized by a mutex),
+ * one dedicated to LISTEN/NOTIFY.
+ */
 export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbEngine> {
   const installDir = await ensurePostgres(opts.version, opts.cacheDir, opts.log)
   const bin = (name: string) => join(installDir, 'bin', name)
@@ -156,7 +163,7 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
   // Remove it if the process it names is no longer alive.
   removeStalePidFile(join(opts.dataDir, 'postmaster.pid'))
 
-  // private socket dir — trust auth is safe because only this user can reach it.
+  // private socket dir - trust auth is safe because only this user can reach it.
   // Keep the path short: macOS caps unix socket paths at ~104 chars.
   const sockDir = mkdtempSync(join(tmpdir(), 'tb-'))
   chmodSync(sockDir, 0o700)
@@ -273,7 +280,7 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
 /**
  * Postgres refuses to boot if a postmaster.pid names a live process. When the
  * previous run crashed the pid is stale; postgres usually clears it, but if the
- * data dir moved or the boot ID differs it may not — remove it when the named
+ * data dir moved or the boot ID differs it may not - remove it when the named
  * pid is dead so a fresh start succeeds.
  */
 function removeStalePidFile(pidPath: string): void {
@@ -286,12 +293,12 @@ function removeStalePidFile(pidPath: string): void {
     }
     try {
       process.kill(pid, 0) // throws if the process does not exist
-      // process is alive — leave the pid file; postgres will report the conflict
+      // process is alive - leave the pid file; postgres will report the conflict
     } catch {
       rmSync(pidPath, { force: true })
     }
   } catch {
-    // unreadable pid file — let postgres decide
+    // unreadable pid file - let postgres decide
   }
 }
 

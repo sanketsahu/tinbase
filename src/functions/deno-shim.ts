@@ -10,7 +10,7 @@
  * injected SUPABASE_* vars and declared function secrets (never the host
  * process.env).
  *
- * Not resolved: `npm:` / `jsr:` / URL import specifiers and the Deno std lib —
+ * Not resolved: `npm:` / `jsr:` / URL import specifiers and the Deno std lib -
  * a function using those needs a bundling step. Functions that stick to Web
  * APIs (fetch/Request/Response) + Deno.serve/Deno.env work as-is.
  */
@@ -46,7 +46,7 @@ export async function runWithDenoEnv<T>(env: Record<string, string>, fn: () => P
 export function installDenoShim(): void {
   const g = globalThis as Record<string, unknown> & { Deno?: unknown; __tinbaseDeno?: boolean }
   if (g.__tinbaseDeno) return
-  // a real Deno runtime already provides Deno.serve — don't clobber it
+  // a real Deno runtime already provides Deno.serve - don't clobber it
   if (g.Deno && typeof (g.Deno as { serve?: unknown }).serve === 'function') return
   g.__tinbaseDeno = true
   g.Deno = {
@@ -87,6 +87,7 @@ export function takeCapturedHandler(): DenoHandler | undefined {
   return h
 }
 
+/** Clear any handler captured by Deno.serve(), without returning it. */
 export function resetCapturedHandler(): void {
   captured.handler = undefined
 }

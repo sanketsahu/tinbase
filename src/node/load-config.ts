@@ -26,62 +26,75 @@ import {
 
 /** The project's config.toml, projected into the shapes tinbase consumes. */
 export interface ProjectConfig {
+  /** the [auth] slice: settings, redirects, sessions, rate limits, OAuth */
   auth: AuthConfig
+  /** the [api] slice: exposed schemas and row cap */
   api: ApiConfig
+  /** the [storage] slice: default size limit and buckets to seed */
   storage: StorageConfig
+  /** the [db.seed] slice: whether/what to seed */
   seed: SeedConfig
-  /** Per-function options keyed by function name ([functions.<name>]). */
+  /** per-function options keyed by function name ([functions.<name>]) */
   functions: Record<string, FunctionOptions>
 }
 
+/** The `[auth]` slice of config.toml, projected into the shapes the backend consumes. */
 export interface AuthConfig {
-  /** Whether to run the auth service ([auth].enabled). */
+  /** whether to run the auth service ([auth].enabled) */
   enabled?: boolean
-  /** Runtime-toggleable settings, layered under the live auth.config table. */
+  /** runtime-toggleable settings, layered under the live auth.config table */
   settings: Partial<AuthSettings>
-  /** [auth].site_url. */
+  /** [auth].site_url */
   siteUrl?: string
-  /** [auth].jwt_expiry, seconds. */
+  /** [auth].jwt_expiry, seconds */
   jwtExpiry?: number
-  /** [auth].additional_redirect_urls. */
+  /** [auth].additional_redirect_urls */
   uriAllowList?: string[]
-  /** [auth.rate_limit].* mapped to the auth limiter's rules. */
+  /** [auth.rate_limit].* mapped to the auth limiter's rules */
   rateLimits?: Record<string, RateLimitRule>
-  /** [auth.sessions].timebox, seconds. */
+  /** [auth.sessions].timebox, seconds */
   sessionTimeboxSeconds?: number
-  /** [auth.sessions].inactivity_timeout, seconds. */
+  /** [auth.sessions].inactivity_timeout, seconds */
   sessionInactivitySeconds?: number
-  /** OAuth providers from [auth.external.*] and env-var fallbacks. */
+  /** OAuth providers from [auth.external.*] and env-var fallbacks */
   oauthProviders: Record<string, OAuthProviderConfig>
 }
 
+/** The `[api]` slice of config.toml. */
 export interface ApiConfig {
-  /** [api].schemas -> exposed schemas (db-schemas). */
+  /** [api].schemas: schemas exposed through the Data API (db-schemas) */
   schemas?: string[]
-  /** [api].max_rows -> REST row cap. */
+  /** [api].max_rows: REST read row cap */
   maxRows?: number
 }
 
+/** The `[storage]` slice of config.toml. */
 export interface StorageConfig {
-  /** [storage].file_size_limit -> default per-bucket byte limit. */
+  /** [storage].file_size_limit: default per-bucket byte limit */
   fileSizeLimit?: number
-  /** [storage.buckets.*] -> buckets to create at boot. */
+  /** [storage.buckets.*]: buckets to create at boot */
   buckets?: BucketSeed[]
 }
 
+/** The `[db.seed]` slice of config.toml. */
 export interface SeedConfig {
-  /** [db.seed].enabled. */
+  /** [db.seed].enabled */
   enabled?: boolean
-  /** [db.seed].sql_paths (files or globs, relative to supabase/). */
+  /** [db.seed].sql_paths (files or globs, relative to supabase/) */
   paths?: string[]
 }
 
+/** Per-function `[functions.<name>]` options. */
 export interface FunctionOptions {
+  /** [functions.<name>].enabled */
   enabled?: boolean
+  /** [functions.<name>].verify_jwt */
   verifyJwt?: boolean
+  /** [functions.<name>].entrypoint, relative to the project root */
   entrypoint?: string
 }
 
+/** Parse supabase/config.toml once and project it into a {@link ProjectConfig}. */
 export function loadProjectConfig(projectDir: string, env: NodeJS.ProcessEnv = process.env): ProjectConfig {
   const root = loadConfigToml(projectDir, env)
   return {

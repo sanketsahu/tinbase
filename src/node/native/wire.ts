@@ -1,19 +1,27 @@
 /**
- * Minimal Postgres wire-protocol (v3) client — enough for tinbase's needs:
+ * Minimal Postgres wire-protocol (v3) client - enough for tinbase's needs:
  * trust auth over a unix socket, simple + extended queries, typed decoding,
  * LISTEN/NOTIFY. Pure Node, no dependencies.
  */
 import { createConnection, type Socket } from 'node:net'
 
+/** Result of one wire query: returned rows plus, for writes, the affected row count. */
 export interface WireResults<T = any> {
+  /** result rows, typed as `T` */
   rows: T[]
+  /** rows touched by an INSERT/UPDATE/DELETE; undefined for plain SELECTs */
   affectedRows?: number
 }
 
+/** Error raised from a Postgres ErrorResponse, carrying its structured fields. */
 export class PgWireError extends Error {
+  /** SQLSTATE code (ErrorResponse field 'C') */
   code?: string
+  /** human-readable detail line (field 'D') */
   detail?: string
+  /** suggested fix, if the server sent one (field 'H') */
   hint?: string
+  /** severity level, e.g. ERROR / FATAL (field 'S') */
   severity?: string
   constructor(fields: Map<string, string>) {
     super(fields.get('M') ?? 'postgres error')
@@ -29,6 +37,7 @@ interface Column {
   typeOid: number
 }
 
+/** A single Postgres connection speaking the v3 wire protocol; one op at a time, queued. */
 export class PgWireClient {
   private socket!: Socket
   private buffer = Buffer.alloc(0)
@@ -41,8 +50,10 @@ export class PgWireClient {
   } | null = null
   private queue: Promise<unknown> = Promise.resolve()
   private closed = false
+  /** invoked for each NOTIFY on a LISTENed channel; set by the caller before listening */
   onNotification: ((channel: string, payload: string) => void) | null = null
 
+  /** Open a connection and complete the trust-auth startup handshake before resolving. */
   static async connect(opts: { socketPath?: string; host?: string; port?: number; user: string; database: string }) {
     const client = new PgWireClient()
     await client.open(opts)
@@ -80,7 +91,7 @@ export class PgWireClient {
         while ((msg = this.nextMessage()) !== null) {
           const [type, payload] = msg
           if (type === 0x52) {
-            // Authentication — only trust (code 0) supported
+            // Authentication - only trust (code 0) supported
             const code = payload.readInt32BE(0)
             if (code !== 0) {
               reject(new Error(`unsupported auth method ${code} (tinbase native uses trust over unix socket)`))
@@ -99,7 +110,7 @@ export class PgWireClient {
             resolve()
             return
           }
-          // ParameterStatus (S), BackendKeyData (K), NoticeResponse (N) — ignore
+          // ParameterStatus (S), BackendKeyData (K), NoticeResponse (N) - ignore
         }
       }
       this.socket.on('data', startupHandler)
@@ -120,7 +131,7 @@ export class PgWireClient {
     return op
   }
 
-  /** Simple query protocol — supports multiple statements. */
+  /** Simple query protocol - supports multiple statements. */
   async exec(sql: string): Promise<WireResults[]> {
     return this.run(() => this.socket.write(message(0x51, cstring(sql))))
   }
@@ -148,6 +159,7 @@ export class PgWireClient {
     return (results[0] ?? { rows: [] }) as WireResults<T>
   }
 
+  /** Send Terminate and end the socket; a no-op once already closed. */
   close(): Promise<void> {
     return new Promise((resolve) => {
       if (this.closed) return resolve()
@@ -212,7 +224,7 @@ export class PgWireClient {
           break
         }
         case 0x43: {
-          // CommandComplete — tag like "INSERT 0 5" / "UPDATE 3" / "SELECT 2"
+          // CommandComplete - tag like "INSERT 0 5" / "UPDATE 3" / "SELECT 2"
           if (!p) break
           const tag = payload.toString('utf8', 0, payload.length - 1)
           const parts = tag.split(' ')
@@ -226,7 +238,7 @@ export class PgWireClient {
           break
         }
         case 0x45: {
-          // ErrorResponse — final resolution happens at ReadyForQuery
+          // ErrorResponse - final resolution happens at ReadyForQuery
           if (p) p.error = new PgWireError(parseErrorFields(payload))
           break
         }
@@ -241,7 +253,7 @@ export class PgWireClient {
           break
         }
         case 0x5a: {
-          // ReadyForQuery — op finished
+          // ReadyForQuery - op finished
           if (!p) break
           this.pending = null
           if (p.error) p.reject(p.error)
@@ -253,7 +265,7 @@ export class PgWireClient {
           break
         }
         // ParseComplete (1), BindComplete (2), NoData (n), EmptyQueryResponse (I),
-        // NoticeResponse (N), ParameterStatus (S) — ignored
+        // NoticeResponse (N), ParameterStatus (S) - ignored
       }
     }
   }
@@ -299,7 +311,7 @@ function decodeValue(text: string, oid: number): unknown {
     case 16: // bool
       return text === 't'
     case 20: {
-      // int8: values beyond 2^53 lose precision as a JS number — return the
+      // int8: values beyond 2^53 lose precision as a JS number - return the
       // string in that range (matching node-postgres' default) so large ids
       // (snowflake, long-lived pgmq msg_ids) survive intact.
       const n = Number(text)

@@ -1,5 +1,5 @@
 /**
- * In-process scheduler that runs the jobs recorded in cron.job — the execution
+ * In-process scheduler that runs the jobs recorded in cron.job - the execution
  * half of our pg_cron emulation (the cron.schedule()/unschedule() SQL functions
  * live in db/emulated.ts). Supports standard 5-field cron expressions and
  * pg_cron's "N seconds" form. Cron fields are matched in UTC, to match hosted
@@ -16,6 +16,11 @@ interface JobRow {
   active: boolean
 }
 
+/**
+ * Polls cron.job on the tick interval and runs any due jobs as superuser,
+ * logging each run to cron.job_run_details - the execution half of the pg_cron
+ * emulation.
+ */
 export class CronService {
   private timer: ReturnType<typeof setInterval> | null = null
   private lastRun = new Map<number, number>() // jobid → epoch ms of last run
@@ -30,6 +35,7 @@ export class CronService {
     private now: () => Date = () => new Date()
   ) {}
 
+  /** Begin polling for due jobs on the tick interval; no-op if already running. */
   start(): void {
     if (this.timer) return
     this.timer = setInterval(() => {
@@ -40,7 +46,7 @@ export class CronService {
 
   /**
    * Stop the scheduler and wait for any in-flight tick to finish before the
-   * caller closes the database — the single connection busy-loops if closed
+   * caller closes the database - the single connection busy-loops if closed
    * while a job query is still queued.
    */
   async stop(): Promise<void> {

@@ -1,16 +1,28 @@
+/**
+ * The Data API: a PostgREST-compatible REST layer over /rest/v1/*. Routes
+ * table CRUD and RPC calls, parses the query string, delegates SQL generation
+ * to {@link QueryBuilder}, and renders PostgREST-shaped responses (Content-Range
+ * counts, singular-object media type, Prefer handling).
+ */
 import { quoteIdent, quoteLiteral, type Database, type FunctionInfo } from '../db/database.js'
 import { ApiError, TINBASE_VERSION, type RequestContext } from '../types.js'
 import { QueryBuilder, pgArrayLiteral, renderColumnExpr, sanitizeCast } from './build.js'
 import { errorToResponse, jsonResponse } from './errors.js'
 import { ParseError, parseQuery, type ParsedQuery } from './parse.js'
 
+/** Parsed `Prefer` header directives that shape a request's behavior/response. */
 interface Prefer {
+  /** `return=` - whether a mutation echoes the rows, nothing, or only headers */
   return?: 'representation' | 'minimal' | 'headers-only'
+  /** `count=` - include a total row count (only `exact` is computed here) */
   count?: 'exact' | 'planned' | 'estimated'
+  /** `resolution=` - upsert conflict behavior on insert */
   resolution?: 'merge-duplicates' | 'ignore-duplicates'
+  /** `missing=` - treat columns absent from an insert body as their default or as null */
   missing?: 'default' | 'null'
 }
 
+/** Parse a comma-separated `Prefer` header; unknown tokens are ignored. */
 function parsePrefer(header: string | null): Prefer {
   const prefer: Prefer = {}
   if (!header) return prefer
@@ -24,8 +36,10 @@ function parsePrefer(header: string | null): Prefer {
   return prefer
 }
 
+/** Accept/Content-Type that requests (or returns) a single object instead of an array. */
 const OBJECT_MEDIA = 'application/vnd.pgrst.object+json'
 
+/** Dispatches /rest/v1/* requests to table or RPC handling and builds responses. */
 export class RestHandler {
   /** Schemas reachable through the Data API for non-privileged roles (PostgREST db-schemas). */
   private exposedSchemas: string[]
@@ -40,6 +54,7 @@ export class RestHandler {
     this.maxRows = opts?.maxRows
   }
 
+  /** Entry point: resolve the profile schema, enforce schema exposure, route to table/rpc. */
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
     try {
       const rest = url.pathname.replace(/^\/rest\/v1\/?/, '')
@@ -53,7 +68,7 @@ export class RestHandler {
 
       // PostgREST-style schema exposure: anon/authenticated can only profile
       // into the configured schemas. The service_role key may reach any schema
-      // (grants still apply) — that's what powers cross-schema browsing in the
+      // (grants still apply) - that's what powers cross-schema browsing in the
       // studio, mirroring Supabase's privileged pg-meta connection.
       if (!this.exposedSchemas.includes(schema) && ctx.role !== 'service_role') {
         return jsonResponse(406, {
@@ -295,7 +310,7 @@ export class RestHandler {
     const q = parseQuery(searchParams)
 
     // A VOLATILE function may have run DDL (create/alter/drop), so drop the
-    // schema/function caches afterwards — otherwise REST keeps serving a stale
+    // schema/function caches afterwards - otherwise REST keeps serving a stale
     // shape until the next migration.
     if (fn.volatility === 'v') {
       return await this.runRpc(ctx, fn, call, q, prefer, wantsObject, schema, method).finally(() =>

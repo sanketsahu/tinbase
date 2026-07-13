@@ -40,6 +40,11 @@ interface FnRow {
 
 const JSON_TYPE = 'Json'
 
+/**
+ * Emit the `Database` type source (see module header) for one schema of the
+ * live database. Reads columns, enums, functions, and foreign keys, then formats
+ * them into the Supabase-shaped type text ready to write to a .d.ts.
+ */
 export async function generateTypes(db: Database, schema = 'public'): Promise<string> {
   const enums = await loadEnums(db, schema)
   const enumNames = new Set(enums.map((e) => e.name))
@@ -108,7 +113,7 @@ export async function generateTypes(db: Database, schema = 'public'): Promise<st
 
   // Args/Returns for one function row (an overload). Multiple rows sharing a
   // name are merged into a union below so the emitted type never has duplicate
-  // keys — matching the official generator.
+  // keys - matching the official generator.
   const fnArgs = (f: FnRow): string =>
     !f.args_json || f.args_json.length === 0
       ? 'Record<PropertyKey, never>'

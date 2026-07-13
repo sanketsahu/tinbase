@@ -26,18 +26,29 @@ export async function findAvailablePort(startPort: number, host = '127.0.0.1', m
   return null
 }
 
+/** Options for {@link serve}. */
 export interface ServeOptions {
+  /** Port to bind. Defaults to 54321. */
   port?: number
+  /** Host to bind. Defaults to 127.0.0.1 (loopback only). */
   host?: string
 }
 
+/** A bound HTTP server plus its resolved address and a graceful shutdown hook. */
 export interface RunningServer {
   server: Server
+  /** The actually-bound port (may differ from the requested one when 0 is passed). */
   port: number
   url: string
   close: () => Promise<void>
 }
 
+/**
+ * Bind an HTTP server that dispatches requests to `backend.fetch` and upgrades
+ * `/realtime/v1` WebSocket handshakes into realtime sessions.
+ *
+ * @throws if the port is already in use (EADDRINUSE) or binding otherwise fails.
+ */
 export async function serve(backend: TinbaseBackend, opts: ServeOptions = {}): Promise<RunningServer> {
   const host = opts.host ?? '127.0.0.1'
 

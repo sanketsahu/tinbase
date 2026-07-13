@@ -1,16 +1,17 @@
 /**
- * Local email inbox — the tinbase equivalent of Supabase local's Inbucket /
+ * Local email inbox - the tinbase equivalent of Supabase local's Inbucket /
  * Mailpit. When no custom mailer is configured, outgoing auth emails (magic
  * links, OTP codes, password recovery, email-change confirmations) are captured
  * in memory and viewable at /inbox, so you can test those flows locally without
  * a real SMTP server.
  *
  * Dev-only by nature: it exposes email contents (including sign-in links) with
- * no auth, exactly like Inbucket. Not for production — provide your own
+ * no auth, exactly like Inbucket. Not for production - provide your own
  * `mailer` there and no inbox is mounted.
  */
 import type { MailMessage, Mailer } from '../types.js'
 
+/** A captured message plus the link/code extracted from its body for the inbox UI. */
 export interface InboxEntry extends MailMessage {
   id: string
   created_at: string
@@ -22,6 +23,7 @@ export interface InboxEntry extends MailMessage {
 
 const CAP = 200
 
+/** In-memory {@link Mailer} that captures the most recent {@link CAP} messages and serves the /inbox UI. */
 export class InboxMailer implements Mailer {
   private messages: InboxEntry[] = []
 

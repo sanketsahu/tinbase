@@ -1,7 +1,7 @@
 /**
  * Minimal QR Code generator (byte mode, full version/ECC/mask support) used to
  * render the MFA enrollment otpauth:// URI as a scannable SVG. Compact port of
- * Nayuki's public-domain "QR Code generator" algorithm — no dependencies.
+ * Nayuki's public-domain "QR Code generator" algorithm - no dependencies.
  * Source of the algorithm: https://www.nayuki.io/page/qr-code-generator-library
  */
 

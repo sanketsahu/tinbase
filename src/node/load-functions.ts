@@ -8,7 +8,7 @@ import { bundleFunction } from './bundle-function.js'
 
 /**
  * Load edge-function secrets from supabase/functions/.env (KEY=VALUE lines,
- * `#` comments). These are exposed to functions via Deno.env and ctx.env —
+ * `#` comments). These are exposed to functions via Deno.env and ctx.env -
  * the local equivalent of `supabase functions serve --env-file`.
  */
 export async function loadFunctionEnv(projectDir: string): Promise<Record<string, string>> {
@@ -42,6 +42,14 @@ export interface LoadFunctionOptions {
   entrypoint?: string
 }
 
+/**
+ * Discover and load every edge function under supabase/functions/, keyed by
+ * directory name. Dirs starting with `_` or `.` are skipped (shared code), as
+ * are functions disabled in config.toml. Each function is bundled with esbuild
+ * when available (falling back to a plain import), then its handler is taken
+ * from a default export or a captured `Deno.serve()` call. Load failures warn
+ * and skip rather than throwing, so one broken function can't block startup.
+ */
 export async function loadFunctions(
   projectDir: string,
   options: Record<string, LoadFunctionOptions> = {}

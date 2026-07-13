@@ -1,13 +1,15 @@
 /**
- * Idempotent bootstrap SQL that shapes a fresh PGlite database like a
- * Supabase project: roles, auth schema, storage schema, helper functions,
- * migration bookkeeping, and the realtime CDC plumbing.
+ * Idempotent bootstrap SQL that shapes a fresh database like a Supabase
+ * project. Two variants: the full {@link BOOTSTRAP_SQL} for the real engines,
+ * and the reduced {@link MINIMAL_BOOTSTRAP_SQL} below for the pg-mem subset.
+ * Both are safe to re-run (create ... if not exists / create or replace).
  */
+
 /**
  * Reduced bootstrap for subset engines (pg-mem) that can't run plpgsql, RLS
  * policies, extensions, or LISTEN/NOTIFY. Just the schemas, core tables, and
  * SQL-language auth helpers needed for the REST + auth CRUD surface. No RLS is
- * enforced here — this path is for local-dev/preview only.
+ * enforced here - this path is for local-dev/preview only.
  */
 export const MINIMAL_BOOTSTRAP_SQL = `
 create schema if not exists auth;
@@ -152,6 +154,12 @@ create table if not exists supabase_migrations.seed_files (
 );
 `
 
+/**
+ * Full bootstrap for the real engines (PGlite / native embedded Postgres):
+ * extensions, the anon/authenticated/service_role roles, GoTrue-compatible auth
+ * schema, storage schema with default RLS policies, migration bookkeeping, and
+ * the realtime CDC + broadcast plumbing.
+ */
 export const BOOTSTRAP_SQL = `
 -- ── Extensions ─────────────────────────────────────────────────────────────
 -- Supabase enables these by default and migrations lean on them
@@ -172,7 +180,7 @@ begin
 end $$;
 
 -- uuid-ossp isn't in every Postgres build (it needs an external UUID lib at
--- build time — e.g. the theseus Linux binaries omit it). uuid_generate_v4() is
+-- build time - e.g. the theseus Linux binaries omit it). uuid_generate_v4() is
 -- the single most-used function from it, so shim it onto core gen_random_uuid()
 -- (also a v4 UUID) whenever the real extension isn't present, so migrations
 -- that call it work identically on every engine and platform.

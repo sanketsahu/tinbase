@@ -18,21 +18,32 @@ import {
   type SelectItem,
 } from './parse.js'
 
+/** A resolved embed relationship between a base table and an embedded target. */
 interface Relationship {
+  /** to-one (base holds the fk), to-many (target holds the fk), or m2m via a junction */
   type: 'to-one' | 'to-many' | 'm2m'
+  /** the foreign key driving the join; for m2m this is the junction's fk to the base */
   fk: ForeignKey
+  /** junction table and its two fks, present only for m2m relationships */
   junction?: { table: string; fkToBase: ForeignKey; fkToTarget: ForeignKey }
+  /** name of the embedded target table */
   targetTable: string
 }
 
+/** A built SQL statement plus its bind params and an optional separate count query. */
 export interface BuiltQuery {
+  /** SQL text with `$n` placeholders */
   sql: string
+  /** positional bind values for the placeholders */
   params: unknown[]
+  /** separate exact-count query, emitted only when the client asked for a count */
   countSql?: string
 }
 
+/** json_agg fallback for an empty result set: a literal empty JSON array. */
 const AGG_EMPTY = `'[]'::json`
 
+/** Builds SQL for one PostgREST request against a single schema's introspection. */
 export class QueryBuilder {
   private aliasCounter = 0
   private consumedPaths = new Set<string>([''])
@@ -72,6 +83,7 @@ export class QueryBuilder {
 
   // ── public entrypoints ────────────────────────────────────────────────
 
+  /** Build the SELECT (with embeds/filters/order/pagination), plus an optional count query. */
   buildSelect(table: string, opts: { count?: boolean } = {}): BuiltQuery {
     this.table(table)
     const alias = 't0'
@@ -91,6 +103,12 @@ export class QueryBuilder {
     }
   }
 
+  /**
+   * Build a multi-row INSERT, optionally with ON CONFLICT upsert semantics.
+   * @param opts.upsert merge-duplicates (do update) or ignore-duplicates (do nothing)
+   * @param opts.missingDefault emit `default` for absent columns instead of `null`
+   * @param opts.returning wrap in a CTE so select= can shape the returned rows
+   */
   buildInsert(
     table: string,
     rows: Record<string, unknown>[],
@@ -152,6 +170,7 @@ export class QueryBuilder {
     return { sql: this.wrapMutation(insert, table), params }
   }
 
+  /** Build an UPDATE scoped by the base filters; SET comes from the JSON body. */
   buildUpdate(table: string, body: Record<string, unknown>, opts: { returning: boolean }): BuiltQuery {
     const tinfo = this.table(table)
     const keys = Object.keys(body)
@@ -170,6 +189,7 @@ export class QueryBuilder {
     return { sql: this.wrapMutation(update, table, true), params }
   }
 
+  /** Build a DELETE scoped by the base filters. */
   buildDelete(table: string, opts: { returning: boolean }): BuiltQuery {
     this.table(table)
     const alias = this.aliasMutations ? 't0' : ''
@@ -391,6 +411,7 @@ export class QueryBuilder {
     return conds.length > 0 ? ` where ${conds.join(' and ')}` : ''
   }
 
+  /** Render one condition (leaf filter or and/or subtree) as a SQL boolean expression. */
   renderCond(cond: Cond, alias: string): string {
     if (cond.kind === 'logic') return this.renderLogic(cond, alias)
     return renderFilter(cond, alias)
@@ -405,6 +426,7 @@ export class QueryBuilder {
     return node.negated ? `not ${joined}` : joined
   }
 
+  /** Render the `order by` clause for the terms scoped to the given embed path (`[]` = base). */
   renderOrder(path: string[], alias: string): string {
     const pathKey = path.join('.')
     const terms = this.q.order.filter((o) => o.path.join('.') === pathKey)
@@ -418,6 +440,7 @@ export class QueryBuilder {
     return ` order by ${parts.join(', ')}`
   }
 
+  /** Render `limit`/`offset` for the given path key (`''` = base); empty when neither is set. */
   renderLimitOffset(pathKey: string): string {
     let s = ''
     const limit = this.q.limits.get(pathKey)
@@ -496,7 +519,12 @@ export class QueryBuilder {
 
 // ── shared rendering helpers ────────────────────────────────────────────
 
-/** "data->a->>b" → "data"->'a'->>'b' ; numeric keys become array indexes. */
+/**
+ * Render a (possibly JSON-arrowed) column reference: `data->a->>b` becomes
+ * `"data"->'a'->>'b'`; numeric keys become array indexes.
+ * SECURITY: the base column is quoted as an identifier and text keys are quoted
+ * as literals, so a hostile column/key name can't break out of the expression.
+ */
 export function renderColumnExpr(alias: string, raw: string): string {
   const tokens = raw.split(/(->>|->)/)
   const base = unquote(tokens[0].trim())
@@ -515,6 +543,12 @@ function defaultAliasFor(raw: string): string {
   return unquote(tokens[tokens.length - 1].trim())
 }
 
+/**
+ * Validate a `::type` cast against an identifier-plus-`[]` allowlist and return it.
+ * SECURITY: casts are interpolated raw into SQL, so this reject is the only guard
+ * against injection through the cast token.
+ * @throws ParseError when the cast is not a bare type name (optionally array).
+ */
 export function sanitizeCast(cast: string): string {
   if (!/^[a-zA-Z_][a-zA-Z0-9_ ]*(\[\])?$/.test(cast)) throw new ParseError(`invalid cast: ${cast}`)
   return cast
@@ -527,6 +561,11 @@ function udtToCast(udt: string): string {
   return `::${quoteIdent(base)}${arr ? '[]' : ''}`
 }
 
+/**
+ * Serialize a JS array into a Postgres array literal (`{a,b,...}`), recursing
+ * for nested arrays. Elements are double-quoted with backslash/quote escaping so
+ * the literal survives being bound as a parameter and cast to the target type.
+ */
 export function pgArrayLiteral(arr: unknown[]): string {
   const items = arr.map((el): string => {
     if (el === null || el === undefined) return 'NULL'

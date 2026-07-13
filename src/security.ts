@@ -18,11 +18,15 @@ export function isNetworkExposed(host: string | undefined): boolean {
   return !LOOPBACK_HOSTS.has(host)
 }
 
+/** Inputs to {@link assertSecretsSafe}: the bind host, the secrets in use, and a warning sink. */
 export interface SecretGuardInput {
+  /** host the server is bound to; drives the loopback-vs-exposed decision */
   host?: string
+  /** the JWT secret in use; a weak/default value is only allowed on loopback */
   jwtSecret: string
-  /** Whether the vault key was derived from the JWT secret rather than set explicitly. */
+  /** whether the vault key was derived from the JWT secret rather than set explicitly */
   vaultKeyDerived: boolean
+  /** sink for non-fatal warnings (loopback-only weak-secret notices) */
   warn: (msg: string) => void
 }
 
@@ -48,7 +52,7 @@ export function assertSecretsSafe(input: SecretGuardInput): void {
           `Set a strong secret via --jwt-secret or the TINBASE_JWT_SECRET env var.`
       )
     }
-    warn(`⚠ ${reason} — fine for local dev, but set --jwt-secret before exposing this server.`)
+    warn(`⚠ ${reason} - fine for local dev, but set --jwt-secret before exposing this server.`)
   }
 
   if (vaultKeyDerived && (usingDefaultSecret || weakSecret)) {
@@ -58,6 +62,6 @@ export function assertSecretsSafe(input: SecretGuardInput): void {
           'while network-exposed. Set an independent vaultKey (createBackend) so at-rest encryption is real.'
       )
     }
-    warn('⚠ Vault key derived from the JWT secret — set an independent vaultKey before exposing this server.')
+    warn('⚠ Vault key derived from the JWT secret - set an independent vaultKey before exposing this server.')
   }
 }

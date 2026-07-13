@@ -1,5 +1,5 @@
 /**
- * A minimal TOML reader for supabase/config.toml — just enough of the format to
+ * A minimal TOML reader for supabase/config.toml - just enough of the format to
  * read a real Supabase project's settings, without a TOML dependency. It handles
  * the subset config.toml actually uses:
  *
@@ -10,7 +10,7 @@
  *   - `env(VAR)` substitution against process.env (or a provided env)
  *
  * It does NOT handle inline tables (`{ a = 1 }`), multi-line arrays, or dotted
- * keys inside a table body — none of which config.toml uses for the settings we
+ * keys inside a table body - none of which config.toml uses for the settings we
  * read. Each loader (auth, api, storage, functions, oauth) reads from the one
  * parsed tree instead of re-scanning the file.
  */
@@ -19,7 +19,9 @@ import { join } from 'node:path'
 
 /** A parsed table: its scalar/array values plus nested child tables. */
 export interface ConfigTable {
+  /** scalar and single-line-array values declared directly under this table, by key */
   values: Map<string, string | string[]>
+  /** nested child tables, by their (single, undotted) segment name */
   children: Map<string, ConfigTable>
 }
 
@@ -121,11 +123,13 @@ export function tableAt(root: ConfigTable, path: string): ConfigTable | undefine
   return t
 }
 
+/** String value at `key`, or undefined if absent, empty, or an array. */
 export function getString(table: ConfigTable | undefined, key: string): string | undefined {
   const v = table?.values.get(key)
   return typeof v === 'string' && v !== '' ? v : undefined
 }
 
+/** Boolean value at `key`, or undefined if absent or not exactly true/false. */
 export function getBool(table: ConfigTable | undefined, key: string): boolean | undefined {
   const v = table?.values.get(key)
   if (v === 'true') return true
@@ -133,6 +137,7 @@ export function getBool(table: ConfigTable | undefined, key: string): boolean | 
   return undefined
 }
 
+/** Integer value at `key` (base 10), or undefined if absent or unparseable. */
 export function getInt(table: ConfigTable | undefined, key: string): number | undefined {
   const v = table?.values.get(key)
   if (typeof v !== 'string') return undefined
@@ -140,6 +145,7 @@ export function getInt(table: ConfigTable | undefined, key: string): number | un
   return Number.isFinite(n) ? n : undefined
 }
 
+/** String-array value at `key`, or undefined if absent or a scalar. */
 export function getStringArray(table: ConfigTable | undefined, key: string): string[] | undefined {
   const v = table?.values.get(key)
   return Array.isArray(v) ? v : undefined

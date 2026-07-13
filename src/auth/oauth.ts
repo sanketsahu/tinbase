@@ -14,23 +14,35 @@ import type { Database } from '../db/database.js'
 import { randomToken } from '../jwt.js'
 import { resolveRedirect } from './redirect.js'
 
+/** Operator-supplied config for one OAuth provider. Endpoint URLs are optional for presets (google, github). */
 export interface OAuthProviderConfig {
+  /** OAuth client id issued by the provider */
   clientId: string
+  /** OAuth client secret issued by the provider */
   clientSecret: string
   /** Overrides; filled from a preset for known providers (google, github). */
   authorizeUrl?: string
+  /** token endpoint; filled from a preset when omitted */
   tokenUrl?: string
+  /** userinfo endpoint; filled from a preset when omitted */
   userInfoUrl?: string
+  /** space-separated scopes to request; falls back to the preset's */
   scopes?: string
   /** Map the provider's raw userinfo JSON to a normalized profile. */
   profileMap?: (raw: any) => OAuthProfile
 }
 
+/** Normalized profile extracted from a provider's userinfo response. */
 export interface OAuthProfile {
+  /** Provider-local user id (becomes auth.identities.provider_id). */
   id: string
+  /** email address the provider returned, if any */
   email?: string
+  /** Whether the provider asserts the email is verified; gated for account linking. */
   emailVerified?: boolean
+  /** display name the provider returned, if any */
   name?: string
+  /** extra provider fields (avatar, username, …) merged into identity_data */
   metadata?: Record<string, unknown>
 }
 
@@ -62,6 +74,12 @@ const PRESETS: Record<string, Partial<OAuthProviderConfig>> = {
   },
 }
 
+/**
+ * Merge operator config with the built-in preset for `name` into a fully
+ * resolved provider.
+ *
+ * @throws if no endpoint URLs are supplied and no preset exists for `name`.
+ */
 export function resolveProvider(name: string, cfg: OAuthProviderConfig): ResolvedProvider {
   const preset = PRESETS[name] ?? {}
   const authorizeUrl = cfg.authorizeUrl ?? preset.authorizeUrl
@@ -82,6 +100,7 @@ export function resolveProvider(name: string, cfg: OAuthProviderConfig): Resolve
   }
 }
 
+/** Drives the OAuth authorize/callback/PKCE flows against the configured providers. */
 export class OAuthService {
   private providers = new Map<string, ResolvedProvider>()
 
@@ -98,6 +117,7 @@ export class OAuthService {
     }
   }
 
+  /** Whether a provider by this name is configured. */
   has(name: string): boolean {
     return this.providers.has(name)
   }
@@ -106,7 +126,7 @@ export class OAuthService {
     return `${this.siteUrl}/auth/v1/callback`
   }
 
-  /** GET /authorize — persist state, redirect to the provider. */
+  /** GET /authorize - persist state, redirect to the provider. */
   async authorize(url: URL): Promise<Response> {
     const providerName = url.searchParams.get('provider') ?? ''
     const provider = this.providers.get(providerName)
@@ -116,7 +136,7 @@ export class OAuthService {
     const providerState = randomToken(16)
     const scopes = url.searchParams.get('scopes') || provider.scopes
     // Validate the redirect target up front so the callback can trust the stored
-    // value — an unallowed target falls back to the site URL.
+    // value - an unallowed target falls back to the site URL.
     const redirectTo = resolveRedirect(url.searchParams.get('redirect_to'), this.siteUrl, this.uriAllowList, this.enforceRedirectAllowList)
     await this.db.query(
       `insert into auth.flow_state (provider, provider_state, redirect_to, code_challenge, code_challenge_method, expires_at)
@@ -139,7 +159,7 @@ export class OAuthService {
     return redirect(`${provider.authorizeUrl}?${p}`)
   }
 
-  /** GET /callback — exchange code, upsert user+identity, redirect back. */
+  /** GET /callback - exchange code, upsert user+identity, redirect back. */
   async callback(url: URL, createSession: (userId: string) => Promise<OAuthSession>): Promise<Response> {
     const code = url.searchParams.get('code')
     const state = url.searchParams.get('state')
@@ -182,7 +202,7 @@ export class OAuthService {
     return redirect(`${flow.redirect_to}${hash}`)
   }
 
-  /** POST /token?grant_type=pkce — exchange an auth code + verifier for a session. */
+  /** POST /token?grant_type=pkce - exchange an auth code + verifier for a session. */
   async exchangePkce(authCode: string, verifier: string): Promise<string | null> {
     const res = await this.db.query<FlowRow>(
       `delete from auth.flow_state where auth_code = $1 and expires_at > now() returning *`,
@@ -246,7 +266,7 @@ export class OAuthService {
     }
 
     // Link to an existing user with the same email ONLY when the provider
-    // asserts the email is verified — otherwise an attacker could register a
+    // asserts the email is verified - otherwise an attacker could register a
     // provider account with a victim's unverified email and take over their
     // account. Unverified → fall through and create a separate user.
     let userId: string | undefined
@@ -287,9 +307,13 @@ export class OAuthService {
   }
 }
 
+/** The minimal session the callback puts in the redirect fragment for the implicit flow. */
 export interface OAuthSession {
+  /** signed access token (JWT) */
   access_token: string
+  /** opaque refresh token */
   refresh_token: string
+  /** access-token lifetime in seconds */
   expires_in: number
 }
 

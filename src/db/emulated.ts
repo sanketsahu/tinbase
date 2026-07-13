@@ -10,6 +10,12 @@
  */
 
 // ── pgmq (message queue) ────────────────────────────────────────────────────
+
+/**
+ * Self-contained SQL emulation of the pgmq extension: per-queue `q_<name>` /
+ * `a_<name>` tables plus create/send/read/pop/delete/archive/etc functions,
+ * matching pgmq's signatures. No C extension, no background worker needed.
+ */
 export const PGMQ_SQL = `
 create schema if not exists pgmq;
 grant usage on schema pgmq to anon, authenticated, service_role;
@@ -118,10 +124,16 @@ grant execute on all functions in schema pgmq to anon, authenticated, service_ro
 `
 
 // ── cron (scheduled jobs) ────────────────────────────────────────────────────
+
+/**
+ * pg_cron emulation: the `cron.job` / `cron.job_run_details` tables and
+ * schedule/unschedule functions. This only records jobs; the in-process
+ * CronService (src/cron/service.ts) reads the table and runs them.
+ */
 export const CRON_SQL = `
 create schema if not exists cron;
 -- cron.schedule executes arbitrary SQL as the (superuser) function owner, so it
--- must stay restricted to service_role — matching hosted Supabase, where
+-- must stay restricted to service_role - matching hosted Supabase, where
 -- authenticated cannot schedule jobs.
 grant usage on schema cron to service_role;
 
@@ -181,16 +193,18 @@ end $cron$;
 grant execute on function cron.schedule(text,text,text), cron.schedule(text,text), cron.unschedule(text), cron.unschedule(bigint) to service_role;
 `
 
-// pg_net emulation — the `net.http_get/post/delete` SQL surface. The functions
-// only enqueue into net.http_request_queue; the in-process NetService
-// (src/net/service.ts) performs the HTTP and records the reply in
-// net._http_response, exactly like pg_net's background worker. This lets the
-// common Supabase pattern — a cron job that calls net.http_post to hit an Edge
-// Function — run unchanged, with no C extension on either engine.
+/**
+ * pg_net emulation - the `net.http_get/post/delete` SQL surface. The functions
+ * only enqueue into net.http_request_queue; the in-process NetService
+ * (src/net/service.ts) performs the HTTP and records the reply in
+ * net._http_response, exactly like pg_net's background worker. This lets the
+ * common Supabase pattern - a cron job that calls net.http_post to hit an Edge
+ * Function - run unchanged, with no C extension on either engine.
+ */
 export const NET_SQL = `
 create schema if not exists net;
 -- net.http_* can reach arbitrary URLs from the server (SSRF surface), so keep it
--- restricted to service_role like hosted Supabase — not authenticated.
+-- restricted to service_role like hosted Supabase - not authenticated.
 grant usage on schema net to service_role;
 
 create table if not exists net.http_request_queue (
@@ -263,11 +277,13 @@ end $net$;
 grant execute on function net.http_get(text,jsonb,jsonb,int), net.http_post(text,jsonb,jsonb,jsonb,int), net.http_delete(text,jsonb,jsonb,int) to service_role;
 `
 
-// Small pure-SQL stand-ins for contrib extensions Supabase migrations lean on
-// but which aren't in the PGlite / native builds. `moddatetime` (a BEFORE
-// UPDATE trigger that stamps a timestamp column) is the common one — projects
-// attach it as the updated_at trigger. Created only if absent, so a real
-// extension (where present) still wins.
+/**
+ * Small pure-SQL stand-ins for contrib extensions Supabase migrations lean on
+ * but which aren't in the PGlite / native builds. `moddatetime` (a BEFORE
+ * UPDATE trigger that stamps a timestamp column) is the common one - projects
+ * attach it as the updated_at trigger. Created only if absent, so a real
+ * extension (where present) still wins.
+ */
 export const EXT_COMPAT_SQL = `
 create schema if not exists extensions;
 do $ensure_moddatetime$
@@ -291,16 +307,18 @@ end
 $ensure_moddatetime$;
 `
 
-// Supabase Vault emulation. Real Vault (supabase_vault + pgsodium) encrypts
-// secrets at rest; we can't ship those C extensions. This stand-in keeps the
-// same surface (vault.secrets, vault.decrypted_secrets, vault.create_secret /
-// update_secret) but stores the secret encrypted with pgcrypto's authenticated
-// symmetric encryption (pgp_sym_encrypt) under a key held in the GUC
-// app.settings.vault_key — set at boot, never stored in the database.
-//
-// The stored `secret` column holds ciphertext; decrypted_secrets decrypts on
-// read. If pgcrypto or the key is unavailable the functions raise, rather than
-// silently falling back to cleartext.
+/**
+ * Supabase Vault emulation. Real Vault (supabase_vault + pgsodium) encrypts
+ * secrets at rest; we can't ship those C extensions. This stand-in keeps the
+ * same surface (vault.secrets, vault.decrypted_secrets, vault.create_secret /
+ * update_secret) but stores the secret encrypted with pgcrypto's authenticated
+ * symmetric encryption (pgp_sym_encrypt) under a key held in the GUC
+ * app.settings.vault_key, set at boot and never stored in the database.
+ *
+ * SECURITY: the stored `secret` column holds ciphertext; decrypted_secrets
+ * decrypts on read. If pgcrypto or the key is unavailable the functions raise,
+ * rather than silently falling back to cleartext.
+ */
 export const VAULT_SQL = `
 create schema if not exists vault;
 grant usage on schema vault to service_role;

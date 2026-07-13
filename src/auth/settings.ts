@@ -1,11 +1,16 @@
 /**
- * Runtime-mutable auth settings — the knobs Studio's "Sign In / Providers"
+ * Runtime-mutable auth settings - the knobs Studio's "Sign In / Providers"
  * page toggles. One shared object is created at boot, read by the auth
  * handler on every request, mutated in place by the admin API, and persisted
  * to the auth.config kv table so restarts keep the operator's choices.
  */
 import type { Database } from '../db/database.js'
 
+/**
+ * Runtime-mutable auth configuration. One shared instance is read by the auth
+ * handler on every request and edited in place by the admin API, so changes
+ * apply immediately; it is persisted to auth.config to survive restarts.
+ */
 export interface AuthSettings {
   /** When true, new email/password signups are rejected (existing users can still sign in). */
   disableSignup: boolean
@@ -17,7 +22,7 @@ export interface AuthSettings {
   minPasswordLength: number
   /** Configured OAuth providers the operator has switched off at runtime. */
   disabledProviders: string[]
-  /** Digits in emailed OTP codes (config.toml auth.email.otp_length; 6–10). */
+  /** Digits in emailed OTP codes (config.toml auth.email.otp_length; 6-10). */
   otpLength: number
   /** OTP / magic-link lifetime in seconds (auth.email.otp_expiry). */
   otpExpirySeconds: number
@@ -29,6 +34,7 @@ export interface AuthSettings {
   totpVerifyEnabled: boolean
 }
 
+/** Built-in defaults, matching `supabase start`'s permissive local posture (autoconfirm on, anonymous users on). */
 export const DEFAULT_AUTH_SETTINGS: AuthSettings = {
   disableSignup: false,
   anonymousUsers: true,
@@ -71,8 +77,8 @@ function sanitize(raw: Record<string, unknown>): AuthSettings {
 /**
  * Resolve the effective auth settings by layering, low precedence first:
  *   1. built-in defaults
- *   2. `defaults` — the committed baseline (config.toml [auth]); portable, in VCS
- *   3. the persisted auth.config row — per-instance live overrides from the studio
+ *   2. `defaults` - the committed baseline (config.toml [auth]); portable, in VCS
+ *   3. the persisted auth.config row - per-instance live overrides from the studio
  *
  * config.toml stays the source of truth a project commits; the studio's live
  * toggles are overrides on top, so both models coexist.
@@ -99,22 +105,37 @@ export async function saveAuthSettings(db: Database, settings: AuthSettings): Pr
 
 /**
  * Apply a partial patch onto the shared settings object IN PLACE (so every
- * holder of the reference — the auth handler — sees the change immediately).
+ * holder of the reference - the auth handler - sees the change immediately).
  *
  * @returns An error message for an invalid patch, or `null` on success.
  */
 export function applyAuthSettingsPatch(target: AuthSettings, patch: Record<string, unknown>): string | null {
-  const KEYS = ['disableSignup', 'anonymousUsers', 'autoconfirm', 'minPasswordLength', 'disabledProviders']
+  // Every AuthSettings key is patchable; unknown keys are rejected so a typo
+  // fails loudly instead of being silently dropped by sanitize().
+  const BOOL_KEYS = ['disableSignup', 'anonymousUsers', 'autoconfirm', 'totpEnrollEnabled', 'totpVerifyEnabled']
+  const NUMBER_KEYS = ['minPasswordLength', 'otpLength', 'otpExpirySeconds', 'maxEnrolledFactors']
+  const KEYS = [...BOOL_KEYS, ...NUMBER_KEYS, 'disabledProviders']
   for (const k of Object.keys(patch)) {
     if (!KEYS.includes(k)) return `unknown setting: ${k}`
   }
-  for (const k of ['disableSignup', 'anonymousUsers', 'autoconfirm'] as const) {
+  for (const k of BOOL_KEYS) {
     if (k in patch && typeof patch[k] !== 'boolean') return `${k} must be a boolean`
   }
-  if ('minPasswordLength' in patch) {
-    const n = patch.minPasswordLength
-    if (typeof n !== 'number' || !Number.isFinite(n) || n < 4 || n > 72) {
-      return 'minPasswordLength must be a number between 4 and 72'
+  // Bounds mirror sanitize() so validation and clamping never disagree.
+  const numBounds: Record<string, { min: number; max: number }> = {
+    minPasswordLength: { min: 4, max: 72 },
+    otpLength: { min: 6, max: 10 },
+    otpExpirySeconds: { min: 1, max: Number.MAX_SAFE_INTEGER },
+    maxEnrolledFactors: { min: 1, max: Number.MAX_SAFE_INTEGER },
+  }
+  for (const k of NUMBER_KEYS) {
+    if (!(k in patch)) continue
+    const n = patch[k]
+    const { min, max } = numBounds[k]
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < min || n > max) {
+      return max === Number.MAX_SAFE_INTEGER
+        ? `${k} must be a number >= ${min}`
+        : `${k} must be a number between ${min} and ${max}`
     }
   }
   if ('disabledProviders' in patch) {

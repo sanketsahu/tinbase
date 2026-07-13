@@ -24,12 +24,17 @@ async function derive(password: string, salt: Uint8Array, iterations: number): P
   return new Uint8Array(bits)
 }
 
+/** Hash a password into the self-describing `pbkdf2$iterations$salt$hash` string stored in encrypted_password. */
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const hash = await derive(password, salt, ITERATIONS)
   return `pbkdf2$${ITERATIONS}$${toHex(salt)}$${toHex(hash)}`
 }
 
+/**
+ * Verify a password against a stored `pbkdf2$…` hash, re-deriving with the
+ * salt/iterations embedded in it. Returns false for any malformed hash.
+ */
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = stored.split('$')
   if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false
@@ -39,6 +44,8 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const hash = await derive(password, salt, iterations)
   const actual = toHex(hash)
   if (actual.length !== expected.length) return false
+  // SECURITY: constant-time compare over the full hash to avoid leaking a
+  // match prefix via timing.
   let diff = 0
   for (let i = 0; i < actual.length; i++) diff |= actual.charCodeAt(i) ^ expected.charCodeAt(i)
   return diff === 0

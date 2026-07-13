@@ -1,5 +1,5 @@
 /**
- * GoTrue-compatible auth endpoints (/auth/v1/*) — the subset supabase-js
+ * GoTrue-compatible auth endpoints (/auth/v1/*) - the subset supabase-js
  * uses for email/password auth, sessions, and admin user management.
  */
 import type { Database } from '../db/database.js'
@@ -13,13 +13,19 @@ import { resolveRedirect } from './redirect.js'
 import { RateLimiter } from './rate-limit.js'
 import { generateTotpSecret, otpauthUri, verifyTotp } from './totp.js'
 
+/** Construction-time config for {@link AuthHandler}. */
 export interface AuthConfig {
+  /** HS256 secret used to sign and verify access tokens */
   jwtSecret: string
+  /** public base URL of this instance; used as issuer and default redirect target */
   siteUrl: string
+  /** Access-token lifetime in seconds. */
   jwtExpiry: number
   /** Force sign-out after this many seconds (config.toml auth.sessions.timebox). Caps session lifetime. */
   sessionTimeboxSeconds?: number
+  /** sends outgoing auth email (magic links, OTP codes, recovery) */
   mailer: Mailer
+  /** OAuth providers to enable, keyed by provider name (google, github, …) */
   oauthProviders?: Record<string, OAuthProviderConfig>
   /** injectable fetch for the OAuth provider calls (tests use a mock provider) */
   oauthFetch?: typeof fetch
@@ -68,7 +74,7 @@ function authError(status: number, errorCode: string, msg: string): Response {
   return json(status, { code: status, error_code: errorCode, msg })
 }
 
-/** A cryptographically-random numeric OTP of `length` digits (6–10). */
+/** A cryptographically-random numeric OTP of `length` digits (6-10). */
 function randomOtp(length: number): string {
   const n = Math.max(6, Math.min(10, Math.floor(length)))
   const buf = new Uint32Array(n)
@@ -90,9 +96,10 @@ function iso(v: Date | string | null): string | null {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString()
 }
 
+/** Routes and services the GoTrue-compatible `/auth/v1/*` endpoints. */
 export class AuthHandler {
   private oauth: OAuthService
-  /** Shared, runtime-mutable settings — read on every request, never copied. */
+  /** Shared, runtime-mutable settings - read on every request, never copied. */
   private settings: AuthSettings
   private rateLimiter: RateLimiter | null
 
@@ -132,6 +139,7 @@ export class AuthHandler {
     this.rateLimiter?.stop()
   }
 
+  /** Dispatch one `/auth/v1/*` request. Any thrown error becomes a 500 `unexpected_failure`. */
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
     const path = url.pathname.replace(/^\/auth\/v1\/?/, '').replace(/\/+$/, '')
     const method = req.method.toUpperCase()
@@ -317,7 +325,7 @@ export class AuthHandler {
     const params: unknown[] = []
     // Upgrading an anonymous user to a permanent one: adding an email (and
     // usually a password) keeps the same id + data, flips is_anonymous off, and
-    // records an email identity — matching supabase.auth.updateUser({ email }).
+    // records an email identity - matching supabase.auth.updateUser({ email }).
     const upgradingAnon = (user.is_anonymous ?? false) && !!body.email
     if (body.email) {
       const email = body.email.toLowerCase().trim()
@@ -473,7 +481,7 @@ export class AuthHandler {
     const body = (await req.json().catch(() => ({}))) as { type?: string; email?: string; token?: string }
     if (!body.token) return authError(400, 'validation_failed', 'token is required')
     // A recovery (password-reset) token must be redeemed with type=recovery
-    // explicitly — never fold it into the default set, or a guessed login OTP
+    // explicitly - never fold it into the default set, or a guessed login OTP
     // could mint a recovery session.
     const types =
       body.type === 'recovery' ? ['recovery'] : body.type === 'magiclink' ? ['magiclink'] : ['otp', 'magiclink']
@@ -486,7 +494,7 @@ export class AuthHandler {
     const token = url.searchParams.get('token') ?? ''
     const type = url.searchParams.get('type') ?? 'magiclink'
     // Never redirect (with the freshly minted session tokens) to an origin the
-    // operator hasn't allowed — a crafted magic-link would otherwise exfiltrate
+    // operator hasn't allowed - a crafted magic-link would otherwise exfiltrate
     // the session. Unknown targets fall back to the site URL.
     const redirectTo = resolveRedirect(
       url.searchParams.get('redirect_to'),
@@ -624,7 +632,7 @@ export class AuthHandler {
   /**
    * Export everything held about one user across the auth schema, for a GDPR
    * right-of-access / portability request. Credentials (password hash, MFA
-   * secrets, raw token values) are deliberately omitted — they are not personal
+   * secrets, raw token values) are deliberately omitted - they are not personal
    * data to hand back and exporting them would leak secrets.
    */
   private async exportUser(userId: string): Promise<Response> {
@@ -677,7 +685,7 @@ export class AuthHandler {
    * doesn't exist and a summary of what was erased.
    *
    * Note: storage.objects.owner has no FK to auth.users, so object rows/bytes
-   * owned by the user are not removed here — see COMPLIANCE.md for the
+   * owned by the user are not removed here - see COMPLIANCE.md for the
    * storage-erasure step the operator must run.
    */
   private async eraseUser(userId: string): Promise<Response> {
@@ -877,6 +885,7 @@ export class AuthHandler {
     return (res.rows[0] as UserRow) ?? null
   }
 
+  /** Shape a user row into the GoTrue user object supabase-js expects. */
   userJson(
     u: UserRow,
     factors: Record<string, unknown>[] = [],

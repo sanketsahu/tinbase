@@ -38,7 +38,7 @@ function adminError(e: unknown): Response {
   return json(500, { error: e instanceof Error ? e.message : String(e) })
 }
 
-/** Built-in edge-function vars tinbase injects — read-only, can't be edited/deleted. */
+/** Built-in edge-function vars tinbase injects - read-only, can't be edited/deleted. */
 const BUILTIN_SECRETS = new Set(['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'])
 
 /**
@@ -55,6 +55,7 @@ async function secretDigests(env: Record<string, string>): Promise<Record<string
   return out
 }
 
+/** Studio-facing admin surface: schema introspection, raw SQL, RLS policies, secrets, and auth settings, all gated on the service_role key. */
 export class AdminApi {
   constructor(
     private db: Database,
@@ -69,13 +70,14 @@ export class AdminApi {
       inbox: boolean
       /** statically configured database webhooks */
       webhooks: unknown[]
-      /** SHARED runtime auth settings — mutated in place so the auth handler sees changes instantly */
+      /** SHARED runtime auth settings - mutated in place so the auth handler sees changes instantly */
       authSettings?: AuthSettings
       /** env vars injected into edge functions (service_role-only introspection for the studio) */
       functionEnv?: Record<string, string>
     }
   ) {}
 
+  /** Route an /admin/v1/* request to its handler, rejecting any non-service_role caller with a 403. */
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
     if (ctx.role !== 'service_role') {
       return json(403, { error: 'admin API requires the service_role key' })
@@ -130,7 +132,7 @@ export class AdminApi {
   /**
    * Patch the shared runtime auth settings (signups / anonymous / autoconfirm /
    * password length / disabled providers). Mutates the object the auth handler
-   * reads on every request — changes apply instantly — and persists it to
+   * reads on every request - changes apply instantly - and persists it to
    * auth.config so a restart keeps them.
    */
   private async patchAuthSettings(req: Request): Promise<Response> {
@@ -138,7 +140,7 @@ export class AdminApi {
     if (!settings) return json(400, { error: 'auth settings are not configured' })
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null
     if (!body || typeof body !== 'object') return json(400, { error: 'a JSON object body is required' })
-    // only known OAuth providers can be disabled — reject typos outright
+    // only known OAuth providers can be disabled - reject typos outright
     if (Array.isArray(body.disabledProviders)) {
       const known = this.info?.oauthProviders ?? []
       const unknown = body.disabledProviders.filter((p) => !known.includes(p as string))
@@ -157,7 +159,7 @@ export class AdminApi {
    * supabase/functions/.env, so a restart reloads from that file. Built-in
    * SUPABASE_* vars are read-only and cannot be overwritten here.
    *
-   * Body: { secrets: { NAME: value, ... } } — names must be valid env keys.
+   * Body: { secrets: { NAME: value, ... } } - names must be valid env keys.
    */
   private async putSecrets(req: Request): Promise<Response> {
     const env = this.info?.functionEnv
@@ -171,7 +173,7 @@ export class AdminApi {
     if (names.length === 0) return json(400, { error: 'at least one secret is required' })
     for (const name of names) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-        return json(400, { error: `invalid secret name "${name}" — use letters, digits, and underscores` })
+        return json(400, { error: `invalid secret name "${name}" - use letters, digits, and underscores` })
       }
       if (BUILTIN_SECRETS.has(name)) return json(400, { error: `"${name}" is a built-in and cannot be changed` })
       if (typeof secrets[name] !== 'string') return json(400, { error: `value for "${name}" must be a string` })
@@ -214,11 +216,12 @@ export class AdminApi {
     return json(200, { token: await signJwt(claims, this.auth.jwtSecret), expiresIn: 3600 })
   }
 
+  /** List a schema's tables and views with columns, primary keys, row counts, and outbound foreign keys for the studio table browser. */
   private async listTables(url: URL): Promise<Response> {
     const schema = url.searchParams.get('schema') ?? 'public'
     this.db.invalidateSchemaCache()
     const info = await this.db.getSchemaInfo(schema)
-    // information_schema.columns includes views, so flag them — the studio
+    // information_schema.columns includes views, so flag them - the studio
     // renders views read-only instead of complaining about a missing PK
     const viewRows = await this.db.query<{ table_name: string }>(
       `select table_name from information_schema.views where table_schema = $1`,
@@ -229,7 +232,7 @@ export class AdminApi {
     for (const t of info.tables.values()) {
       // A single table whose count fails (e.g. an engine gap in an RLS policy's
       // correlated subquery on the pgmem preview engine) must not blank the whole
-      // table list — fall back to an unknown count for just that table.
+      // table list - fall back to an unknown count for just that table.
       let count: { rows: { n: number }[] }
       try {
         count = await this.db.query<{ n: number }>(
@@ -260,10 +263,11 @@ export class AdminApi {
     return json(200, { schema, tables })
   }
 
+  /** Run an arbitrary SQL statement from the studio SQL editor, optionally under a SET LOCAL role + JWT claims to preview RLS as anon/authenticated. */
   private async runSql(req: Request): Promise<Response> {
     const body = (await req.json().catch(() => ({}))) as {
       query?: string
-      /** run as this database role (SET ROLE) — studio "run as anon/authenticated" */
+      /** run as this database role (SET ROLE) - studio "run as anon/authenticated" */
       role?: string
       /** JWT claims exposed as request.jwt.claims so auth.uid()/auth.jwt() resolve */
       claims?: Record<string, unknown>
@@ -276,8 +280,8 @@ export class AdminApi {
     const started = Date.now()
     try {
       // When a role is requested ("run as anon/authenticated"), execute inside a
-      // transaction with SET LOCAL role + request.jwt.claims — the same mechanism
-      // the REST layer uses — so role/claims never leak onto the shared connection
+      // transaction with SET LOCAL role + request.jwt.claims - the same mechanism
+      // the REST layer uses - so role/claims never leak onto the shared connection
       // between concurrent requests. The claims value is passed as a bound
       // parameter, not interpolated.
       const res = role
@@ -295,6 +299,7 @@ export class AdminApi {
     }
   }
 
+  /** List user-visible schema names (excluding the Postgres catalog schemas). */
   private async schemas(): Promise<Response> {
     const res = await this.db.query<{ name: string }>(
       `select schema_name as name from information_schema.schemata
@@ -304,6 +309,7 @@ export class AdminApi {
     return json(200, { schemas: res.rows.map((r) => r.name) })
   }
 
+  /** List applied migrations from supabase_migrations.schema_migrations, ordered by version. */
   private async migrations(): Promise<Response> {
     const res = await this.db.query<{ version: string; name: string | null; applied_at: string }>(
       `select version, name, applied_at from supabase_migrations.schema_migrations order by version`
@@ -311,6 +317,7 @@ export class AdminApi {
     return json(200, { migrations: res.rows })
   }
 
+  /** List the RLS policies defined in a schema (from pg_policies). */
   private async listPolicies(url: URL): Promise<Response> {
     const schema = url.searchParams.get('schema') ?? 'public'
     const res = await this.db.query(
@@ -323,6 +330,7 @@ export class AdminApi {
     return json(200, { policies: res.rows })
   }
 
+  /** Create an RLS policy from the studio policy editor, building the CREATE POLICY DDL from the request body. */
   private async createPolicy(req: Request): Promise<Response> {
     const b = (await req.json().catch(() => ({}))) as {
       schema?: string
@@ -354,6 +362,7 @@ export class AdminApi {
     }
   }
 
+  /** Drop an RLS policy by schema/table/name. */
   private async dropPolicy(url: URL): Promise<Response> {
     const schema = url.searchParams.get('schema') ?? 'public'
     const table = url.searchParams.get('table')
@@ -368,6 +377,7 @@ export class AdminApi {
     }
   }
 
+  /** List a schema's SQL functions with signatures, language, and source body. */
   private async listFunctions(url: URL): Promise<Response> {
     const schema = url.searchParams.get('schema') ?? 'public'
     const res = await this.db.query(
@@ -387,6 +397,7 @@ export class AdminApi {
     return json(200, { functions: res.rows })
   }
 
+  /** List a schema's user triggers with timing and events, decoded from pg_trigger's tgtype bitmask. */
   private async listTriggers(url: URL): Promise<Response> {
     const schema = url.searchParams.get('schema') ?? 'public'
     const res = await this.db.query(
@@ -408,6 +419,7 @@ export class AdminApi {
     return json(200, { triggers: res.rows })
   }
 
+  /** Summary counts (users, buckets, objects, migrations, tables) plus database size and version for the studio dashboard. */
   private async stats(): Promise<Response> {
     const one = async (sql: string) => (await this.db.query<{ n: number }>(sql)).rows[0]?.n ?? 0
     const users = await one(`select count(*)::int as n from auth.users`)

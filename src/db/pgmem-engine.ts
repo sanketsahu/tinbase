@@ -1,5 +1,5 @@
 /**
- * pg-mem engine — an ultralight, pure-JS, in-memory Postgres *subset* for
+ * pg-mem engine - an ultralight, pure-JS, in-memory Postgres *subset* for
  * local dev / previews (RapidNative) where footprint matters more than full
  * fidelity. A ~3.6 MB install with no WASM, vs PGlite's ~600 MB heap.
  *
@@ -7,11 +7,11 @@
  * embeds, count), email/password auth, edge functions, realtime
  * (broadcast/presence + postgres_changes), and database webhooks. Because
  * pg-mem has no triggers/LISTEN/NOTIFY, change events for realtime and webhooks
- * are synthesized in JS by the REST layer (see Database.emitCdc) — every write
+ * are synthesized in JS by the REST layer (see Database.emitCdc) - every write
  * goes through it in-process.
  *
  * What's explicitly NOT here (it is a subset, not a faithful Postgres):
- *   - NO row-level security (policies are skipped; RLS is not enforced) — so
+ *   - NO row-level security (policies are skipped; RLS is not enforced) - so
  *     realtime/webhook events are delivered UNFILTERED, not per-subscriber
  *   - NO PL/pgSQL functions, pgmq, or cron
  *   - reduced introspection; UPDATE change events carry no old_record
@@ -24,7 +24,7 @@ import { Mutex } from './engine.js'
 /**
  * Split SQL into statements on top-level `;`. Respects $tag$…$tag$ dollar-quoted
  * blocks, '…' string literals ('' escapes), "…" quoted identifiers, and both
- * -- line and /* block *​/ comments — so a `;` inside any of those never splits.
+ * -- line and /* block *​/ comments - so a `;` inside any of those never splits.
  */
 function splitStatements(sql: string): string[] {
   const out: string[] = []
@@ -116,18 +116,24 @@ function isSkippable(stmt: string): boolean {
   )
 }
 
+/**
+ * Build the pg-mem subset {@link DbEngine}: an in-memory Postgres for local dev
+ * and previews. Reports `minimalBootstrap: true` so the caller runs the reduced
+ * bootstrap and synthesizes CDC in JS.
+ * @throws if the optional `pg-mem` dependency isn't installed.
+ */
 export async function createPgmemEngine(): Promise<DbEngine> {
   let newDb, DataType
   try {
     ;({ newDb, DataType } = await import('pg-mem'))
   } catch {
-    throw new Error('the pg-mem engine requires the optional `pg-mem` dependency — run `npm install pg-mem`')
+    throw new Error('the pg-mem engine requires the optional `pg-mem` dependency - run `npm install pg-mem`')
   }
 
   const db = newDb({ autoCreateForeignKeyIndices: true })
 
   // functions our REST/bootstrap SQL needs that pg-mem lacks
-  // impure: true so pg-mem evaluates them per row (not once per statement) —
+  // impure: true so pg-mem evaluates them per row (not once per statement) -
   // otherwise every row in a multi-row insert gets the same UUID → PK collision
   db.public.registerFunction({ name: 'gen_random_uuid', returns: DataType.uuid, impure: true, implementation: () => crypto.randomUUID() })
   db.public.registerFunction({ name: 'uuid_generate_v4', returns: DataType.uuid, impure: true, implementation: () => crypto.randomUUID() })
@@ -170,7 +176,7 @@ export async function createPgmemEngine(): Promise<DbEngine> {
 
   /**
    * Tolerant exec: run statements one at a time and skip the ones a real
-   * Supabase migration contains that pg-mem can't do — RLS policies, plpgsql
+   * Supabase migration contains that pg-mem can't do - RLS policies, plpgsql
    * functions/triggers, extensions, grants. Genuine errors on supported DDL
    * still throw. Skipped statements are logged so nothing silently vanishes.
    */
@@ -202,7 +208,7 @@ export async function createPgmemEngine(): Promise<DbEngine> {
         // pg-mem is single-connection in-memory; serialize and use a snapshot so
         // a thrown fn rolls back. Note: pg-mem commits DDL immediately and cannot
         // restore a snapshot once the schema changed, so a rollback attempt after
-        // DDL may itself fail — swallow that and surface the ORIGINAL error.
+        // DDL may itself fail - swallow that and surface the ORIGINAL error.
         const restore = db.backup()
         try {
           return await fn(tx)
@@ -210,12 +216,12 @@ export async function createPgmemEngine(): Promise<DbEngine> {
           try {
             restore.restore()
           } catch {
-            // schema changed since backup (DDL ran) — can't roll back in-memory; ignore
+            // schema changed since backup (DDL ran) - can't roll back in-memory; ignore
           }
           throw e
         }
       }),
-    // no LISTEN/NOTIFY in pg-mem — realtime/webhooks simply don't fire
+    // no LISTEN/NOTIFY in pg-mem - realtime/webhooks simply don't fire
     listen: async () => () => {},
     close: async () => {
       await client.end()

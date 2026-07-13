@@ -1,3 +1,10 @@
+/**
+ * The Database facade over a DbEngine: bootstraps a fresh database into a
+ * Supabase-shaped project, applies migrations/seeds the way the Supabase CLI
+ * does, introspects schema/functions (with caching), and drives the realtime
+ * CDC pipeline. Everything above the engine (REST, auth, storage, realtime)
+ * goes through this class.
+ */
 import { BOOTSTRAP_SQL, MINIMAL_BOOTSTRAP_SQL } from './bootstrap.js'
 import { PGMQ_SQL, CRON_SQL, NET_SQL, EXT_COMPAT_SQL, VAULT_SQL } from './emulated.js'
 import { rewriteMigrationSql } from './sql-compat.js'
@@ -10,14 +17,17 @@ import { createPgliteEngine } from './pglite-engine.js'
 import type { DbEngine, EngineResults, EngineTx } from './engine.js'
 import type { MigrationFile, RequestContext } from '../types.js'
 
+/** One column of an introspected table. */
 export interface ColumnInfo {
   name: string
+  /** underlying pg type name (pg_type.typname / information_schema.udt_name). */
   udtName: string
   isNullable: boolean
   hasDefault: boolean
   isPrimaryKey: boolean
 }
 
+/** A foreign-key constraint, with source and target columns paired by position. */
 export interface ForeignKey {
   constraintName: string
   srcSchema: string
@@ -28,6 +38,7 @@ export interface ForeignKey {
   tgtColumns: string[]
 }
 
+/** An introspected table: its columns and primary-key column names. */
 export interface TableInfo {
   schema: string
   name: string
@@ -35,11 +46,13 @@ export interface TableInfo {
   primaryKey: string[]
 }
 
+/** One argument of a database function. */
 export interface FunctionArg {
   name: string
   type: string
 }
 
+/** An introspected database function (used to route RPC calls). */
 export interface FunctionInfo {
   schema: string
   name: string
@@ -52,23 +65,37 @@ export interface FunctionInfo {
   args: FunctionArg[]
 }
 
+/** Introspected shape of one schema: tables keyed by name, plus its foreign keys. */
 export interface SchemaInfo {
   tables: Map<string, TableInfo>
   foreignKeys: ForeignKey[]
 }
 
+/** A function that runs a parameterized query, e.g. one bound to a transaction. */
 export type Querier = (sql: string, params?: unknown[]) => Promise<EngineResults>
 
+/**
+ * A change-data-capture event for one row, shaped like Supabase Realtime's
+ * `postgres_changes` payload. Emitted by the SQL trigger on the real engines
+ * and synthesized in JS on pg-mem (see {@link Database.emitCdc}).
+ */
 export interface CdcEvent {
   schema: string
   table: string
   type: 'INSERT' | 'UPDATE' | 'DELETE'
   commit_timestamp: string
+  /** post-image; null on DELETE (and on a payload that was too large). */
   record: Record<string, unknown> | null
+  /** pre-image; null on INSERT (and on a payload that was too large). */
   old_record: Record<string, unknown> | null
+  /** set when the row was dropped from the payload, e.g. 'Payload too large'. */
   errors?: string[]
 }
 
+/**
+ * The database facade: wraps a {@link DbEngine} with bootstrap, migration
+ * application, schema introspection (cached), and the realtime CDC pipeline.
+ */
 export class Database {
   private schemaCache = new Map<string, SchemaInfo>()
   private fnCache = new Map<string, FunctionInfo[]>()
@@ -88,7 +115,7 @@ export class Database {
       await engine.exec(MINIMAL_BOOTSTRAP_SQL)
     } else {
       await engine.exec(BOOTSTRAP_SQL)
-      // emulated extensions (pgmq queues, cron, pg_net) — pure SQL, so
+      // emulated extensions (pgmq queues, cron, pg_net) - pure SQL, so
       // pgmq.*/cron.*/net.* work with no C extension on either engine
       await engine.exec(PGMQ_SQL)
       await engine.exec(CRON_SQL)
@@ -104,18 +131,19 @@ export class Database {
     return new Database(engine)
   }
 
-  /** Superuser query — used by auth/storage internals and introspection. */
+  /** Superuser query - used by auth/storage internals and introspection. */
   query<T = any>(sql: string, params?: unknown[]): Promise<EngineResults<T>> {
     return this.engine.query<T>(sql, params)
   }
 
+  /** Run one or more SQL statements with no params (superuser). */
   exec(sql: string): Promise<unknown> {
     return this.engine.exec(sql)
   }
 
   /**
    * Run `fn` inside a transaction with the request's Postgres role and JWT
-   * claims applied via SET LOCAL — this is what makes RLS behave exactly
+   * claims applied via SET LOCAL - this is what makes RLS behave exactly
    * like hosted Supabase.
    */
   async withContext<T>(ctx: RequestContext, fn: (q: Querier) => Promise<T>): Promise<T> {
@@ -131,6 +159,14 @@ export class Database {
 
   // ── Migrations (Supabase CLI conventions) ────────────────────────────
 
+  /**
+   * Apply any not-yet-recorded migrations (in lexicographic version order) and
+   * an optional seed, each in its own transaction, then invalidate the schema
+   * cache. Returns the names of what was applied this run.
+   *
+   * @throws whatever a migration throws, except on the pg-mem engine where an
+   *   unsupported migration is skipped with a warning instead of aborting.
+   */
   async runMigrations(migrations: MigrationFile[], seedSql?: string): Promise<string[]> {
     const applied: string[] = []
     // Plain code-unit comparison (not localeCompare, which is locale-dependent
@@ -149,7 +185,7 @@ export class Database {
           // The Supabase CLI applies each migration on a fresh connection, so a
           // top-level `SET search_path TO ''` in one file never leaks to the next.
           // tinbase runs every migration on one connection, so reset to the
-          // default first — otherwise a hardened migration's search_path change
+          // default first - otherwise a hardened migration's search_path change
           // breaks unqualified calls (e.g. gen_random_bytes) in later files.
           await tx.exec(DEFAULT_SEARCH_PATH_SQL)
           await tx.exec(rewriteMigrationSql(m.sql))
@@ -195,7 +231,7 @@ export class Database {
       }
     }
     if (applied.length > 0) {
-      // a migration/seed may have left the session search_path at '' — restore
+      // a migration/seed may have left the session search_path at '' - restore
       // the default so runtime queries resolve extension functions unqualified
       await this.engine.exec(DEFAULT_SEARCH_PATH_SQL)
       this.invalidateSchemaCache()
@@ -203,6 +239,7 @@ export class Database {
     return applied
   }
 
+  /** Every migration recorded as applied, oldest version first. */
   async listAppliedMigrations(): Promise<{ version: string; name: string | null }[]> {
     const res = await this.engine.query<{ version: string; name: string | null }>(
       `select version, name from supabase_migrations.schema_migrations order by version`
@@ -212,6 +249,7 @@ export class Database {
 
   // ── Introspection ────────────────────────────────────────────────────
 
+  /** Drop all cached introspection; call after any DDL changes the schema. */
   invalidateSchemaCache(): void {
     this.schemaCache.clear()
     this.fnCache.clear()
@@ -235,6 +273,7 @@ export class Database {
     return set
   }
 
+  /** Introspect a schema's tables, columns, PKs, and FKs. Cached per schema. */
   async getSchemaInfo(schema: string): Promise<SchemaInfo> {
     const cached = this.schemaCache.get(schema)
     if (cached) return cached
@@ -343,6 +382,10 @@ export class Database {
     return info
   }
 
+  /**
+   * All overloads of a function by schema + name (cached). Multiple rows mean
+   * the name is overloaded on argument types.
+   */
   async getFunctions(schema: string, name: string): Promise<FunctionInfo[]> {
     const key = `${schema}.${name}`
     const cached = this.fnCache.get(key)
@@ -380,6 +423,7 @@ export class Database {
 
   // ── Realtime CDC ─────────────────────────────────────────────────────
 
+  /** Idempotently attach the CDC notify trigger to a table (real engines only). */
   async ensureCdcTrigger(schema: string, table: string): Promise<void> {
     const s = quoteIdent(schema)
     const t = quoteIdent(table)
@@ -401,6 +445,10 @@ export class Database {
     `)
   }
 
+  /**
+   * Register a CDC listener; the first call starts the single LISTEN on the
+   * shared `tinbase_cdc` channel. Returns an unsubscribe fn.
+   */
   async onCdcEvent(cb: (e: CdcEvent) => void): Promise<() => void> {
     this.cdcListeners.add(cb)
     if (!this.cdcStarted) {
@@ -410,7 +458,7 @@ export class Database {
           const event = JSON.parse(payload) as CdcEvent
           for (const listener of this.cdcListeners) listener(event)
         } catch {
-          // malformed payload — drop
+          // malformed payload - drop
         }
       })
     }
@@ -433,7 +481,7 @@ export class Database {
    * triggers/NOTIFY (pg-mem). Called by the REST handler after a committed
    * mutation, one event per affected row.
    *
-   * NOTE: these engines have no RLS, so events are delivered unfiltered — the
+   * NOTE: these engines have no RLS, so events are delivered unfiltered - the
    * per-subscriber row check in the realtime layer is a no-op here.
    */
   emitCdc(
@@ -454,6 +502,7 @@ export class Database {
     }
   }
 
+  /** Close the underlying engine and its connection. */
   async close(): Promise<void> {
     await this.engine.close()
   }
@@ -487,11 +536,16 @@ export function parseIdentityArgs(identity: string): FunctionArg[] {
   })
 }
 
+/**
+ * Double-quote an identifier for safe interpolation into SQL.
+ * @throws if the name contains a NUL, which Postgres identifiers can't hold.
+ */
 export function quoteIdent(name: string): string {
   if (name.includes('\0')) throw new Error('invalid identifier')
   return `"${name.replaceAll('"', '""')}"`
 }
 
+/** Single-quote a string literal for safe interpolation into SQL. */
 export function quoteLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }

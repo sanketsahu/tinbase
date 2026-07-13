@@ -1,5 +1,5 @@
 /**
- * In-process HTTP sender for the pg_net emulation — the execution half of the
+ * In-process HTTP sender for the pg_net emulation - the execution half of the
  * net.* surface (the net.http_get/post/delete SQL functions live in
  * db/emulated.ts). It drains net.http_request_queue, performs each request with
  * fetch, and records the reply in net._http_response, mirroring pg_net's
@@ -58,15 +58,25 @@ interface RequestRow {
   timeout_milliseconds: number
 }
 
+/** Outcome of one drained request, passed to the optional `onDeliver` callback. */
 export interface NetDelivery {
+  /** net.http_request_queue row id */
   id: number
   method: string
   url: string
+  /** response status; undefined when the request failed before a reply */
   status?: number
+  /** true if the request aborted on its timeout */
   timedOut: boolean
+  /** failure reason (network error, blocked target, etc.); undefined on success */
   error?: string
 }
 
+/**
+ * Drains net.http_request_queue on an interval, performs each request, and
+ * records the reply in net._http_response - the pg_net background worker,
+ * in-process.
+ */
 export class NetService {
   private timer: ReturnType<typeof setInterval> | null = null
   private draining = false
@@ -81,6 +91,7 @@ export class NetService {
     private onDeliver?: (d: NetDelivery) => void
   ) {}
 
+  /** Begin draining the queue on the tick interval; no-op if already running. */
   start(): void {
     if (this.timer) return
     this.timer = setInterval(() => {
@@ -91,7 +102,7 @@ export class NetService {
 
   /**
    * Stop the drain loop and wait for any in-flight tick to finish before the
-   * caller closes the database — the single connection busy-loops if closed
+   * caller closes the database - the single connection busy-loops if closed
    * while a query is still queued.
    */
   async stop(): Promise<void> {
@@ -103,7 +114,7 @@ export class NetService {
 
   /** Drain any queued requests once (also callable directly in tests). */
   async tick(): Promise<void> {
-    if (this.draining) return // never overlap drains — one writer at a time
+    if (this.draining) return // never overlap drains - one writer at a time
     this.draining = true
     try {
       let rows: RequestRow[]
@@ -121,7 +132,7 @@ export class NetService {
           await this.deliver(row)
         } catch (e) {
           // A malformed row must never poison the loop or reject out of the
-          // setInterval callback — dequeue it with the error recorded instead.
+          // setInterval callback - dequeue it with the error recorded instead.
           const msg = e instanceof Error ? e.message : String(e)
           await this.record(row.id, null, null, null, null, false, msg)
           this.onDeliver?.({ id: row.id, method: row.method, url: row.url, timedOut: false, error: msg })

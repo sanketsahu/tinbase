@@ -6,10 +6,11 @@
  * which is sufficient for a single-process local backend.
  */
 
+/** A single sliding-window limit: at most `limit` hits per `windowMs`. */
 export interface RateLimitRule {
-  /** Max requests permitted within the window. */
+  /** max requests permitted within the window */
   limit: number
-  /** Window length in milliseconds. */
+  /** window length in milliseconds */
   windowMs: number
 }
 
@@ -23,6 +24,7 @@ export const DEFAULT_AUTH_RATE_LIMITS: Record<string, RateLimitRule> = {
   recover: { limit: 10, windowMs: 60 * 60 * 1000 },
 }
 
+/** Per-key sliding-window counter with one background sweep to drop stale buckets. */
 export class RateLimiter {
   private hits = new Map<string, number[]>()
   private timer: ReturnType<typeof setInterval> | null = null

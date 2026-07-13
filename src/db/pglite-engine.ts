@@ -1,6 +1,12 @@
-/** PGlite (WASM) engine — imported dynamically so native mode never loads the WASM bundle. */
+/** PGlite (WASM) engine - imported dynamically so native mode never loads the WASM bundle. */
 import type { DbEngine, EngineResults, EngineTx } from './engine.js'
 
+/**
+ * Build a {@link DbEngine} backed by PGlite (WASM Postgres) at `dataDir`, or an
+ * in-memory database when `dataDir` is omitted. Loads the bundled contrib
+ * extensions Supabase enables by default.
+ * @throws if the PGlite WASM bundle isn't available in this build (use the native engine instead).
+ */
 export async function createPgliteEngine(dataDir?: string): Promise<DbEngine> {
   let PGlite, extensions
   try {
@@ -20,7 +26,7 @@ export async function createPgliteEngine(dataDir?: string): Promise<DbEngine> {
   } catch (e) {
     if (e instanceof Error && /wasm/.test(e.message)) throw e
     throw new Error(
-      'the PGlite (wasm) engine is not available in this build — run with --engine native'
+      'the PGlite (wasm) engine is not available in this build - run with --engine native'
     )
   }
   const pg = new PGlite({ dataDir, extensions })

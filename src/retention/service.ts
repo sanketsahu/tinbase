@@ -9,6 +9,7 @@
  */
 import type { Database } from '../db/database.js'
 
+/** Retention windows for the background sweep; a window of 0 disables that sweep. */
 export interface RetentionConfig {
   /** How often to run a sweep (ms). Default 1 hour. */
   intervalMs?: number
@@ -20,6 +21,7 @@ export interface RetentionConfig {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+/** Periodically purges expired/stale auth rows so those tables can't grow unbounded. */
 export class RetentionService {
   private timer: ReturnType<typeof setInterval> | null = null
   // Tracks the sweep currently in flight. The boot sweep and interval sweeps
@@ -41,6 +43,7 @@ export class RetentionService {
     this.refreshTokenDays = config.refreshTokenDays ?? 30
   }
 
+  /** Sweep once at boot, then on the configured interval; no-op if already running. */
   start(): void {
     if (this.timer) return
     // run once at boot, then on the interval (tracking the in-flight sweep)
@@ -81,7 +84,7 @@ export class RetentionService {
     try {
       await this.db.query(sql, params)
     } catch {
-      // table may not exist on a subset engine (pg-mem) — skip
+      // table may not exist on a subset engine (pg-mem) - skip
     }
   }
 }

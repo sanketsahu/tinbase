@@ -4,6 +4,7 @@
  * and/or logic trees, ordering, and pagination.
  */
 
+/** A selected column, optionally aliased and/or cast. */
 export interface SelectColumn {
   kind: 'column'
   /** raw column expression, may contain json arrows: data->>key */
@@ -12,6 +13,7 @@ export interface SelectColumn {
   cast?: string
 }
 
+/** An embedded related resource, e.g. `author(name)` or `...profile(bio)`. */
 export interface SelectEmbed {
   kind: 'embed'
   /** relation (table) name or fk hint target */
@@ -19,13 +21,17 @@ export interface SelectEmbed {
   alias?: string
   /** disambiguation hint: fk constraint name, column name, or junction table */
   hint?: string
+  /** `!inner` - turn the embed into an inner join (filters out unmatched base rows) */
   inner: boolean
   children: SelectItem[]
+  /** `...rel` spread - merge the related row's columns into the parent instead of nesting */
   spread: boolean
 }
 
+/** One entry in a `select=` list: a plain column or an embedded resource. */
 export type SelectItem = SelectColumn | SelectEmbed
 
+/** A single `column=op.value` filter, possibly scoped to an embed path. */
 export interface FilterCond {
   kind: 'filter'
   /** embed path, [] = base table */
@@ -38,6 +44,7 @@ export interface FilterCond {
   ftsConfig?: string
 }
 
+/** An `and(...)`/`or(...)` group of conditions, optionally negated with `not`. */
 export interface LogicCond {
   kind: 'logic'
   path: string[]
@@ -46,8 +53,10 @@ export interface LogicCond {
   conditions: Cond[]
 }
 
+/** A leaf filter or an and/or subtree. */
 export type Cond = FilterCond | LogicCond
 
+/** One `order=` term. `nullsFirst` undefined = let Postgres pick the default. */
 export interface OrderTerm {
   path: string[]
   column: string
@@ -55,20 +64,30 @@ export interface OrderTerm {
   nullsFirst?: boolean
 }
 
+/** The fully parsed query string, consumed by the QueryBuilder. */
 export interface ParsedQuery {
+  /** select tree; defaults to a single `*` column when no `select=` was given */
   select: SelectItem[]
+  /** base and embed-scoped filters, plus and/or logic trees */
   conditions: Cond[]
+  /** ordering terms, each tagged with the embed path it applies to */
   order: OrderTerm[]
-  limits: Map<string, number>   // key = path joined with '.', '' = base
+  /** per-path row limit; key = path joined with '.', '' = base */
+  limits: Map<string, number>
+  /** per-path row offset; same keying as `limits` */
   offsets: Map<string, number>
+  /** `on_conflict=` target columns for upsert */
   onConflict?: string[]
+  /** explicit insert column set from `columns=`; absent = infer from the body rows */
   columns?: string[]
 }
 
+/** Thrown on malformed query syntax; mapped to a 400 PGRST100 by the handler. */
 export class ParseError extends Error {}
 
 const RESERVED = new Set(['select', 'order', 'limit', 'offset', 'on_conflict', 'columns'])
 
+/** PostgREST filter operator → SQL operator/keyword. */
 export const FILTER_OPS: Record<string, string> = {
   eq: '=', neq: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=',
   like: 'like', ilike: 'ilike', match: '~', imatch: '~*',
@@ -79,6 +98,7 @@ export const FILTER_OPS: Record<string, string> = {
   isdistinct: 'is distinct from',
 }
 
+/** Parse a full URLSearchParams into a {@link ParsedQuery}. Unknown reserved keys and `apikey` are skipped. */
 export function parseQuery(searchParams: URLSearchParams): ParsedQuery {
   const q: ParsedQuery = {
     select: [{ kind: 'column', name: '*' }],
@@ -233,6 +253,7 @@ export function splitTopLevel(str: string, delim: string): string[] {
   return out
 }
 
+/** Strip surrounding double quotes and unescape `\"`; passthrough when unquoted. */
 export function unquote(s: string): string {
   if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
     return s.slice(1, -1).replaceAll('\\"', '"')
@@ -241,7 +262,9 @@ export function unquote(s: string): string {
 }
 
 /**
- * select=a,b:c,d::text,rel!hint!inner(x,nested(y)),...spread(a)
+ * Parse a `select=` list into select items (columns and embeds), splitting at
+ * top level so nested embeds and quoted names stay intact.
+ * Grammar example: `select=a,b:c,d::text,rel!hint!inner(x,nested(y)),...spread(a)`
  */
 export function parseSelect(value: string): SelectItem[] {
   return splitTopLevel(value, ',').map((item) => parseSelectItem(item.trim()))

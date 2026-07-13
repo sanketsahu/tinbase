@@ -1,17 +1,22 @@
 /**
- * `tinbase inspect` core: a lightweight database report — per-table row counts
+ * `tinbase inspect` core: a lightweight database report - per-table row counts
  * and on-disk size for a schema. Like a tiny `supabase inspect db`, enough to
  * eyeball what's in a local project. (Uses pg_total_relation_size, so it runs
  * on the real-Postgres engines, not the pg-mem subset.)
  */
 import { quoteIdent, type Database } from './database.js'
 
+/** One row of the inspect report: a table with its row count and on-disk size. */
 export interface TableInfo {
+  /** table name (unqualified) */
   table: string
+  /** live row count from count(*) */
   rows: number
+  /** human-readable total relation size (pg_size_pretty) */
   size: string
 }
 
+/** Report per-table row counts and on-disk sizes for a schema, largest first. */
 export async function inspectDb(db: Database, schema = 'public'): Promise<TableInfo[]> {
   const tables = await db.query<{ table: string; size: string }>(
     `select c.relname as table,

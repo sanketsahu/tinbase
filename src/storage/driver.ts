@@ -1,6 +1,13 @@
+/**
+ * Storage backends for object bytes. The default is in-memory; persistent
+ * drivers (disk, S3) implement the same StorageDriver interface.
+ */
 import type { StorageDriver } from '../types.js'
 
-/** Default driver — keeps object bytes in memory (browser-safe). */
+/**
+ * Default driver - keeps object bytes in memory, keyed by "bucket/key".
+ * Browser-safe (no fs); bytes are lost on restart.
+ */
 export class MemoryStorageDriver implements StorageDriver {
   private files = new Map<string, Uint8Array>()
 

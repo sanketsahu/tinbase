@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * tinbase CLI — a Docker-free Supabase-compatible backend.
+ * tinbase CLI - a Docker-free Supabase-compatible backend.
  *
  *   tinbase start     start the server (applies pending migrations first)
  *   tinbase migrate   apply pending migrations and exit
@@ -23,7 +23,7 @@ import { serveBun } from './node/bun-server.js'
 const IS_BUN = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined'
 // single-file builds ship without the WASM engine; native is the default there
 const IS_BINARY = process.env.TINBASE_SINGLE_BINARY === '1'
-// Native (embedded Postgres) is the default where it's supported — macOS/Linux
+// Native (embedded Postgres) is the default where it's supported - macOS/Linux
 // on x64/arm64. Elsewhere (e.g. Windows) fall back to the WASM (PGlite) engine.
 const NATIVE_SUPPORTED =
   (process.platform === 'darwin' || process.platform === 'linux') &&
@@ -31,21 +31,37 @@ const NATIVE_SUPPORTED =
 import { signJwt } from './jwt.js'
 import { DEFAULT_JWT_SECRET } from './types.js'
 
+/** Parsed command + flags for one CLI invocation. */
 interface CliOptions {
+  /** subcommand to run (defaults to `start`) */
   command: string
   /** positional args after the command, e.g. `db reset` → ['reset'] */
   positionals: string[]
+  /** port to listen on for `start` */
   port: number
+  /** host/interface to bind */
   host: string
+  /** project directory containing supabase/ */
   dir: string
+  /** database data directory; undefined for in-memory (`--memory`) */
   dataDir: string | undefined
+  /** directory for storage object bytes */
   storageDir: string
+  /** secret used to sign/verify JWTs */
   jwtSecret: string
+  /** run the database in memory with no persistence */
   memory: boolean
+  /** database engine: native embedded Postgres, wasm (PGlite), or pgmem (in-memory subset) */
   engine: 'wasm' | 'native' | 'pgmem'
+  /** output migration name for `db diff -f`, if given */
   diffFile?: string
 }
 
+/**
+ * Parse argv (already sliced past `node cli.js`) into {@link CliOptions}. The
+ * command defaults to `start`; env vars provide defaults for port, JWT secret,
+ * and engine. Exits the process on an unknown flag or `--help`.
+ */
 function parseArgs(argv: string[]): CliOptions {
   const args = [...argv]
   const command = args[0] && !args[0].startsWith('-') ? args.shift()! : 'start'
@@ -107,8 +123,9 @@ function loadWebhooks(dir: string): import('./webhooks/service.js').WebhookConfi
   }
 }
 
+/** Print usage (commands + options) to stdout. */
 function printHelp(): void {
-  console.log(`tinbase — Supabase-compatible backend, no Docker (embedded Postgres / PGlite)
+  console.log(`tinbase - Supabase-compatible backend, no Docker (embedded Postgres / PGlite)
 
 Usage: tinbase [command] [options]
 
@@ -132,17 +149,18 @@ Options:
       --jwt-secret <s>  JWT secret (or TINBASE_JWT_SECRET env var)
       --memory          in-memory database (no persistence, wasm engine only)
       --engine <e>      native (embedded Postgres, default on macOS/Linux),
-                        wasm (PGlite — default on Windows, browser-ready), or
-                        pgmem (ultralight in-memory subset — no RLS, cron, or
+                        wasm (PGlite - default on Windows, browser-ready), or
+                        pgmem (ultralight in-memory subset - no RLS, cron, or
                         pgmq; local dev / preview only)
 `)
 }
 
+/** CLI entry point: parse args, dispatch the subcommand, and (for `start`) run the server until SIGINT/SIGTERM. */
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2))
 
   if (opts.command === 'db' && opts.positionals[0] === 'diff') {
-    // `tinbase db diff [-f name]` — DDL for schema changes not yet in migrations
+    // `tinbase db diff [-f name]` - DDL for schema changes not yet in migrations
     const project = await loadSupabaseProject(opts.dir)
     const nativeLive =
       opts.engine === 'native'
@@ -173,7 +191,7 @@ async function main(): Promise<void> {
   }
 
   if (opts.command === 'db' && opts.positionals[0] === 'pull') {
-    // `tinbase db pull [name]` — write the current schema delta as a migration
+    // `tinbase db pull [name]` - write the current schema delta as a migration
     // and record it as already applied (so `start` won't re-run it)
     const project = await loadSupabaseProject(opts.dir)
     const nativeLive =
@@ -198,7 +216,7 @@ async function main(): Promise<void> {
   }
 
   if (opts.command === 'inspect') {
-    // `tinbase inspect` — per-table row counts and on-disk size
+    // `tinbase inspect` - per-table row counts and on-disk size
     const project = await loadSupabaseProject(opts.dir)
     const engine =
       opts.engine === 'native' ? await createNativeEngine({ dataDir: join(opts.dir, '.tinbase', 'pgdata') }) : undefined
@@ -227,7 +245,7 @@ async function main(): Promise<void> {
       console.error(`unknown db subcommand: ${sub ?? '(none)'} (supported: reset, diff, pull)`)
       process.exit(1)
     }
-    // `tinbase db reset` — wipe data + storage and re-run migrations + seed fresh
+    // `tinbase db reset` - wipe data + storage and re-run migrations + seed fresh
     const dataDir = opts.dataDir ?? join(opts.dir, '.tinbase', opts.engine === 'native' ? 'pgdata' : 'db')
     const storageDir = opts.storageDir || join(opts.dir, '.tinbase', 'storage')
     await rm(dataDir, { recursive: true, force: true })
@@ -252,13 +270,13 @@ async function main(): Promise<void> {
       log: (m) => console.log(`  ${m}`),
     })
     const applied = await backend.db.listAppliedMigrations()
-    console.log(`  reset complete — ${applied.length} migration(s) applied${project.seedSql ? ' + seed' : ''}`)
+    console.log(`  reset complete - ${applied.length} migration(s) applied${project.seedSql ? ' + seed' : ''}`)
     await backend.close()
     return
   }
 
   if (opts.command === 'gen') {
-    // `tinbase gen types [typescript]` — emit a Supabase-shaped Database type to stdout
+    // `tinbase gen types [typescript]` - emit a Supabase-shaped Database type to stdout
     const project = await loadSupabaseProject(opts.dir)
     const backend = await createBackend({
       migrations: project.migrations,
@@ -300,11 +318,11 @@ async function main(): Promise<void> {
         ? await createPgmemEngine()
         : undefined
   if (opts.engine === 'pgmem') {
-    console.log('  ⚠ pg-mem engine: in-memory subset — no RLS, cron, or pgmq (realtime is unfiltered) — local dev / preview only')
+    console.log('  ⚠ pg-mem engine: in-memory subset - no RLS, cron, or pgmq (realtime is unfiltered) - local dev / preview only')
   }
 
   // For `start`, pick a free port up front (skipping one already in use, e.g. a
-  // tinbase already running) so the URL, keys, and siteUrl all reflect it —
+  // tinbase already running) so the URL, keys, and siteUrl all reflect it -
   // instead of crashing later with EADDRINUSE.
   let port = opts.port
   if (opts.command === 'start') {
@@ -317,7 +335,7 @@ async function main(): Promise<void> {
       process.exit(1)
     }
     if (free !== opts.port) {
-      console.log(`  ⚠ Port ${opts.port} is in use — starting on ${free} instead (use --port to choose).`)
+      console.log(`  ⚠ Port ${opts.port} is in use - starting on ${free} instead (use --port to choose).`)
     }
     port = free
   }

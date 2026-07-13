@@ -1,11 +1,24 @@
+/**
+ * Public configuration and shared types for the tinbase package. {@link BackendConfig}
+ * is the primary input to {@link import('./index.js').createBackend}; the rest are
+ * the small structural types that config and handlers exchange.
+ */
 import type { JwtClaims } from './jwt.js'
 
+/** A single SQL migration, in Supabase CLI form (one file under supabase/migrations). */
 export interface MigrationFile {
   /** e.g. "20240101120000_create_posts" (no extension) */
   name: string
+  /** Raw SQL applied in one statement batch. */
   sql: string
 }
 
+/**
+ * Configuration for {@link import('./index.js').createBackend}. Every field is
+ * optional; an empty config boots an in-memory PGlite backend on the Supabase
+ * local-dev defaults. The CLI derives this object from supabase/config.toml plus
+ * the project's migrations/functions/seed.
+ */
 export interface BackendConfig {
   /**
    * PGlite data directory. Node: a filesystem path. Browser: "idb://name" or
@@ -20,7 +33,7 @@ export interface BackendConfig {
   /** Secret used to sign/verify every JWT. Defaults to the Supabase local-dev secret. */
   jwtSecret?: string
   /**
-   * Schemas exposed through the Data API (/rest/v1) for anon/authenticated —
+   * Schemas exposed through the Data API (/rest/v1) for anon/authenticated -
    * PostgREST's db-schemas. Requests profiling into any other schema get a 406
    * unless made with the service_role key. Default: ['public'].
    */
@@ -104,9 +117,11 @@ export interface BackendConfig {
   authEnabled?: boolean
 }
 
+/** A rendered outbound email (OTP code, magic link, recovery, etc.). */
 export interface MailMessage {
   to: string
   subject: string
+  /** Plain-text body. Carries OTP codes / magic links, so it is not logged by default. */
   text: string
 }
 
@@ -115,6 +130,13 @@ export interface Mailer {
   send(msg: MailMessage): Promise<void>
 }
 
+/**
+ * The public Supabase local-dev JWT secret. Used when no `jwtSecret` is set so
+ * default keys match a stock `supabase start`.
+ *
+ * SECURITY: forgeable by anyone (it is public). Startup refuses to bind to a
+ * network-exposed host while still using it - see {@link import('./security.js').assertSecretsSafe}.
+ */
 export const DEFAULT_JWT_SECRET = 'super-secret-jwt-token-with-at-least-32-characters-long'
 
 /** tinbase package version, surfaced in health/root responses. Keep in sync with package.json. */
@@ -138,6 +160,7 @@ export interface BucketSeed {
   allowedMimeTypes: string[] | null
 }
 
+/** Pluggable object-storage backend for bucket bytes (in-memory, fs, etc.). */
 export interface StorageDriver {
   put(key: string, data: Uint8Array): Promise<void>
   get(key: string): Promise<Uint8Array | null>
@@ -145,6 +168,7 @@ export interface StorageDriver {
   deleteMany(keys: string[]): Promise<void>
 }
 
+/** Error carrying an HTTP status + JSON body, thrown by handlers and rendered as-is to the client. */
 export class ApiError extends Error {
   constructor(
     public status: number,

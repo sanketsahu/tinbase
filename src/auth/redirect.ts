@@ -8,7 +8,7 @@
 
 /**
  * Convert a GoTrue-style allowlist glob into a RegExp. `*` matches within a
- * path segment, `**` matches across segments — the same semantics GoTrue uses
+ * path segment, `**` matches across segments - the same semantics GoTrue uses
  * for URI_ALLOW_LIST entries.
  */
 function globToRegExp(pattern: string): RegExp {
@@ -37,7 +37,7 @@ function globToRegExp(pattern: string): RegExp {
  * `siteUrl` or matches any `allowList` glob.
  *
  * When `enforce` is false (the default for a loopback/local-dev backend), any
- * well-formed absolute URL is honored — matching how `supabase start` lets a
+ * well-formed absolute URL is honored - matching how `supabase start` lets a
  * dev redirect anywhere locally. The backend sets `enforce` to true once bound
  * to a network-exposed host, at which point the allowlist is strict.
  */
@@ -71,7 +71,7 @@ export function isAllowedRedirect(requested: string, siteUrl: string, allowList:
   try {
     if (target.origin === new URL(siteUrl).origin) return true
   } catch {
-    // siteUrl misconfigured — fall through to the explicit allowlist only.
+    // siteUrl misconfigured - fall through to the explicit allowlist only.
   }
   return allowList.some((entry) => globToRegExp(entry).test(requested))
 }

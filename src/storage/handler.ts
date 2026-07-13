@@ -7,13 +7,15 @@ import type { Database } from '../db/database.js'
 import { signJwt, verifyJwt } from '../jwt.js'
 import type { BucketSeed, RequestContext, StorageDriver } from '../types.js'
 
+/** Construction options for {@link StorageHandler}. */
 export interface StorageConfig {
+  /** secret used to sign and verify signed download/upload URL tokens */
   jwtSecret: string
-  /** Default per-bucket byte limit applied when a bucket sets none (config.toml storage.file_size_limit). */
+  /** default per-bucket byte limit applied when a bucket sets none (config.toml storage.file_size_limit) */
   defaultFileSizeLimit?: number
 }
 
-/** Upper bound on signed-URL lifetime (seconds) — 7 days, matching Supabase's practical max. */
+/** Upper bound on signed-URL lifetime (seconds) - 7 days, matching Supabase's practical max. */
 const MAX_SIGNED_URL_EXPIRY = 7 * 24 * 60 * 60
 
 /** Clamp a client-supplied `expiresIn` to a positive value within the allowed maximum. */
@@ -87,6 +89,7 @@ function isRenderableActiveType(contentType: string): boolean {
   )
 }
 
+/** Routes /storage/v1/* requests to bucket and object operations. */
 export class StorageHandler {
   constructor(
     private db: Database,
@@ -105,6 +108,7 @@ export class StorageHandler {
     }
   }
 
+  /** Entry point: match the path to a bucket/object endpoint and map thrown errors to storage-api responses. */
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
     const rest = url.pathname.replace(/^\/storage\/v1\/?/, '').replace(/\/+$/, '')
     const method = req.method.toUpperCase()
@@ -283,7 +287,7 @@ export class StorageHandler {
 
     if (contentType.startsWith('multipart/form-data')) {
       // storage-js wraps Blob/File bodies in FormData with an EMPTY field
-      // name, which some runtimes' formData() drops — parse bytes ourselves.
+      // name, which some runtimes' formData() drops - parse bytes ourselves.
       const boundary = contentType.match(/boundary="?([^";]+)"?/)?.[1]
       if (!boundary) return storageError(400, 'invalid_request', 'multipart body without boundary')
       const parts = parseMultipart(new Uint8Array(await req.arrayBuffer()), boundary)
@@ -344,7 +348,7 @@ export class StorageHandler {
       if (pg.code === '23505') {
         return storageError(409, 'Duplicate', 'The resource already exists')
       }
-      // Byte write (or a later step) failed after the row committed — remove the
+      // Byte write (or a later step) failed after the row committed - remove the
       // dangling row so metadata and bytes stay consistent.
       if (insertedId) {
         await this.db

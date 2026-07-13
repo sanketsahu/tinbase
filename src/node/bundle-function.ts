@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-/** Map a Deno-style specifier to a fetchable URL. Pure — unit tested. */
+/** Map a Deno-style specifier to a fetchable URL. Pure - unit tested. */
 export function rewriteRemoteSpecifier(spec: string): string {
   if (spec.startsWith('npm:')) return `https://esm.sh/${spec.slice(4)}`
   if (spec.startsWith('jsr:')) return `https://esm.sh/jsr/${spec.slice(4)}`
