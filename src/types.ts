@@ -26,15 +26,36 @@ export interface BackendConfig {
    */
   dbSchemas?: string[]
   /**
+   * Auth setting defaults (the committed baseline, e.g. read from
+   * supabase/config.toml's [auth] section). Live studio edits, persisted in the
+   * auth.config table, are layered on top. Any omitted key falls back to the
+   * built-in default.
+   */
+  authSettings?: Partial<import('./auth/settings.js').AuthSettings>
+  /**
    * Key used to encrypt Vault secrets at rest (pgcrypto). Held only in a session
    * GUC, never stored in the database. Defaults to a value derived from
-   * jwtSecret; set a dedicated key in production.
+   * jwtSecret. Required when binding to a network-exposed host (see `host`);
+   * always set a dedicated key in production.
    */
   vaultKey?: string
   /** External URL of this backend, used as JWT issuer. */
   siteUrl?: string
+  /**
+   * Host the server is bound to. Used only to decide whether the backend is
+   * network-exposed: a non-loopback host turns the default JWT secret and the
+   * derived vault key from warnings into hard startup errors. Default: treated
+   * as loopback (local dev) when omitted.
+   */
+  host?: string
   /** Access token lifetime in seconds (default 3600). */
   jwtExpiry?: number
+  /**
+   * Redirect targets allowed beyond the site URL's own origin (GoTrue's
+   * URI_ALLOW_LIST). Entries may use `*`/`**` globs. A `redirect_to` matching
+   * neither the site origin nor an entry falls back to the site URL.
+   */
+  uriAllowList?: string[]
   /** Migrations to apply on boot (Supabase CLI convention: sorted by name). */
   migrations?: MigrationFile[]
   /** SQL from supabase/seed.sql, applied once after the first migration run. */

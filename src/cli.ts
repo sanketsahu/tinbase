@@ -14,6 +14,7 @@ import { createBackend, generateTypes, createPgmemEngine, inspectDb } from './in
 import { computeDbDiff, pullSchema, shadowNativeDataDir } from './node/db-diff.js'
 import { createNativeEngine } from './node/native/engine.js'
 import { FsStorageDriver } from './node/fs-driver.js'
+import { loadAuthConfigDefaults } from './node/load-auth-config.js'
 import { loadFunctions, loadFunctionEnv } from './node/load-functions.js'
 import { loadOAuthProviders } from './node/load-oauth.js'
 import { loadSupabaseProject } from './node/project.js'
@@ -247,6 +248,7 @@ async function main(): Promise<void> {
       jwtSecret: opts.jwtSecret,
       migrations: project.migrations,
       seedSql: project.seedSql,
+      authSettings: loadAuthConfigDefaults(opts.dir),
       storageDriver: new FsStorageDriver(storageDir),
       log: (m) => console.log(`  ${m}`),
     })
@@ -285,6 +287,7 @@ async function main(): Promise<void> {
   const functions = await loadFunctions(opts.dir)
   const functionEnv = await loadFunctionEnv(opts.dir)
   const oauthProviders = loadOAuthProviders(opts.dir)
+  const authSettings = loadAuthConfigDefaults(opts.dir)
   const webhooks = loadWebhooks(opts.dir)
   if (opts.dataDir) await mkdir(opts.dataDir, { recursive: true })
   await mkdir(opts.storageDir, { recursive: true })
@@ -326,11 +329,13 @@ async function main(): Promise<void> {
     dataDir: opts.memory ? undefined : opts.dataDir,
     jwtSecret: opts.jwtSecret,
     siteUrl: `http://${opts.host}:${port}`,
+    host: opts.host,
     migrations: project.migrations,
     seedSql: project.seedSql,
     functions,
     functionEnv,
     oauthProviders,
+    authSettings,
     webhooks,
     storageDriver: new FsStorageDriver(opts.storageDir),
     log: (msg) => console.log(`  ${msg}`),

@@ -26,6 +26,7 @@ import { CronService } from './cron/service.js'
 import { NetService, type NetDelivery } from './net/service.js'
 import { RetentionService } from './retention/service.js'
 import { DEFAULT_JWT_SECRET, type BackendConfig, type Mailer, type MigrationFile, type RequestContext } from './types.js'
+import { assertSecretsSafe } from './security.js'
 
 export * from './types.js'
 export { Database } from './db/database.js'
@@ -96,7 +97,13 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
   // Vault encryption key: use the configured value, else derive one from the
   // JWT secret so vault secrets are encrypted at rest out of the box (better
   // than the old plaintext store). Set a dedicated vaultKey in production.
+  const vaultKeyDerived = config.vaultKey === undefined
   const vaultKey = config.vaultKey ?? `tinbase-vault:${jwtSecret}`
+
+  // Weak/default secrets are fine on loopback; refuse to start with them when
+  // the server is bound to a network-exposed host.
+  assertSecretsSafe({ host: config.host, jwtSecret, vaultKeyDerived, warn: log })
+
   const db = await Database.create(config.engine ?? config.dataDir, { vaultKey })
   if (config.migrations?.length || config.seedSql) {
     const applied = await db.runMigrations(config.migrations ?? [], config.seedSql)
@@ -129,9 +136,10 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
         )
       )
   const mailer: Mailer = config.mailer ?? inbox!
-  // one shared runtime-settings object: the auth handler reads it per request,
-  // the admin API mutates it (Studio toggles) and persists it to auth.config
-  const authSettings = await loadAuthSettings(db)
+  // one shared runtime-settings object: config.toml [auth] provides the
+  // committed defaults, the persisted auth.config row layers live studio edits
+  // on top, and the auth handler reads the merged object per request
+  const authSettings = await loadAuthSettings(db, config.authSettings)
   const auth = new AuthHandler(db, {
     jwtSecret,
     siteUrl,
@@ -139,6 +147,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     mailer,
     oauthProviders: config.oauthProviders,
     oauthFetch: config.oauthFetch,
+    uriAllowList: config.uriAllowList,
     settings: authSettings,
   })
   const storage = new StorageHandler(db, config.storageDriver ?? new MemoryStorageDriver(), { jwtSecret })
@@ -272,7 +281,8 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     if (path.startsWith('/auth/v1/')) {
       // GoTrue validates the apikey header, but user JWTs ride Authorization
       const apikey = req.headers.get('apikey') ?? url.searchParams.get('apikey')
-      if (!apikey || !(await verifyJwt(apikey, jwtSecret))) {
+      const keyClaims = apikey ? await verifyJwt(apikey, jwtSecret) : null
+      if (!keyClaims) {
         return withCors(
           new Response(JSON.stringify({ message: 'No API key found in request' }), {
             status: 401,
@@ -280,8 +290,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
           })
         )
       }
-      const keyClaims = await verifyJwt(apikey, jwtSecret)
-      const ctx: RequestContext = { role: String(keyClaims?.role ?? 'anon'), claims: keyClaims }
+      const ctx: RequestContext = { role: String(keyClaims.role ?? 'anon'), claims: keyClaims }
       return withCors(await auth.handle(req, ctx, url))
     }
 
@@ -308,10 +317,28 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     )
   }
 
+  // Last-resort guard: the fetch contract is Request → Response, so an
+  // unexpected throw from any handler must become a 500, never a rejected fetch
+  // (in-process/browser callers have no HTTP layer to convert a rejection).
+  const safeHandle = async (req: Request): Promise<Response> => {
+    try {
+      return await handle(req)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      log(`[error] unhandled: ${msg}`)
+      return withCors(
+        new Response(JSON.stringify({ message: 'Internal Server Error' }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+    }
+  }
+
   // request logging for the Logs pane (skip health checks and the log-polling
   // endpoint itself to avoid noise / self-reference)
   const loggedFetch = async (req: Request): Promise<Response> => {
-    const res = await handle(req)
+    const res = await safeHandle(req)
     try {
       const p = new URL(req.url).pathname
       if (p !== '/health' && p !== '/' && p !== '/admin/v1/logs') {
@@ -340,8 +367,9 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     inbox,
     migrate: (migrations, seedSql) => db.runMigrations(migrations, seedSql),
     close: async () => {
-      cron.stop()
-      net.stop()
+      auth.stop()
+      await cron.stop()
+      await net.stop()
       await retention.stop()
       webhooks.stopService()
       realtime.stop()

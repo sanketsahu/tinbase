@@ -42,14 +42,23 @@ function sanitize(raw: Record<string, unknown>): AuthSettings {
   return s
 }
 
-/** Load persisted settings (auth.config key 'settings'), merged over defaults. */
-export async function loadAuthSettings(db: Database): Promise<AuthSettings> {
+/**
+ * Resolve the effective auth settings by layering, low precedence first:
+ *   1. built-in defaults
+ *   2. `defaults` — the committed baseline (config.toml [auth]); portable, in VCS
+ *   3. the persisted auth.config row — per-instance live overrides from the studio
+ *
+ * config.toml stays the source of truth a project commits; the studio's live
+ * toggles are overrides on top, so both models coexist.
+ */
+export async function loadAuthSettings(db: Database, defaults: Partial<AuthSettings> = {}): Promise<AuthSettings> {
+  const base = sanitize({ ...DEFAULT_AUTH_SETTINGS, ...defaults })
   try {
     const res = await db.query(`select value from auth.config where key = 'settings'`)
-    const stored = (res.rows[0] as { value: Record<string, unknown> } | undefined)?.value ?? {}
-    return sanitize(stored)
+    const stored = (res.rows[0] as { value: Record<string, unknown> } | undefined)?.value
+    return stored ? sanitize({ ...base, ...stored }) : base
   } catch {
-    return { ...DEFAULT_AUTH_SETTINGS }
+    return base
   }
 }
 
