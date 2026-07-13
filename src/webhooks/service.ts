@@ -6,6 +6,7 @@
  * webhook payload exactly: { type, table, schema, record, old_record }.
  */
 import type { CdcEvent, Database } from '../db/database.js'
+import { blockedNetTarget } from '../net/service.js'
 
 export interface WebhookConfig {
   /** table to watch */
@@ -39,7 +40,13 @@ export class WebhooksService {
   constructor(
     private db: Database,
     private fetchImpl: typeof fetch = fetch,
-    private onDelivery?: (d: WebhookDelivery) => void
+    private onDelivery?: (d: WebhookDelivery) => void,
+    /**
+     * Block delivery to loopback/private/link-local targets (SSRF guard). Off by
+     * default so local dev can point a webhook at a local edge function, as
+     * `supabase start` does; the backend turns it on when network-exposed.
+     */
+    private restrictTargets = false
   ) {}
 
   list(): WebhookConfig[] {
@@ -90,6 +97,11 @@ export class WebhooksService {
       schema: event.schema,
       record: event.record ?? null,
       old_record: event.old_record ?? null,
+    }
+    const blocked = this.restrictTargets ? blockedNetTarget(hook.url) : null
+    if (blocked) {
+      this.onDelivery?.({ webhook: hook, event, status: null, ok: false, error: blocked })
+      return
     }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), hook.timeoutMs ?? 5000)

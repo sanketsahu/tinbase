@@ -20,6 +20,8 @@ export class CronService {
   private timer: ReturnType<typeof setInterval> | null = null
   private lastRun = new Map<number, number>() // jobid → epoch ms of last run
   private lastMinute = new Map<number, number>() // jobid → minute bucket last run
+  /** The in-flight tick, tracked so stop() can drain it before db.close(). */
+  private inFlight: Promise<void> | null = null
 
   constructor(
     private db: Database,
@@ -30,13 +32,22 @@ export class CronService {
 
   start(): void {
     if (this.timer) return
-    this.timer = setInterval(() => void this.tick(), this.tickMs)
+    this.timer = setInterval(() => {
+      this.inFlight = this.tick()
+    }, this.tickMs)
     if (typeof this.timer === 'object' && 'unref' in this.timer) (this.timer as { unref: () => void }).unref()
   }
 
-  stop(): void {
+  /**
+   * Stop the scheduler and wait for any in-flight tick to finish before the
+   * caller closes the database — the single connection busy-loops if closed
+   * while a job query is still queued.
+   */
+  async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    await this.inFlight?.catch(() => {})
+    this.inFlight = null
   }
 
   /** Run any due jobs once (also callable directly in tests). */

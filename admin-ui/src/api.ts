@@ -4,21 +4,25 @@
  * @module
  */
 
-let KEY = localStorage.getItem('tinbase_service_key') || ''
+// The service_role key bypasses RLS and unlocks arbitrary SQL, so it lives in
+// sessionStorage (scoped to the tab, cleared when it closes) rather than
+// localStorage — it never persists to disk across browser sessions.
+const KEY_STORAGE = 'tinbase_service_key'
+let KEY = sessionStorage.getItem(KEY_STORAGE) || ''
 
 /** Returns the stored service_role key. */
 export const getKey = () => KEY
 
-/** Stores the service_role key in memory and localStorage. */
+/** Stores the service_role key in memory and sessionStorage (tab-scoped). */
 export const setKey = (k: string) => {
   KEY = k
-  localStorage.setItem('tinbase_service_key', k)
+  sessionStorage.setItem(KEY_STORAGE, k)
 }
 
-/** Clears the stored service_role key from memory and localStorage. */
+/** Clears the stored service_role key from memory and sessionStorage. */
 export const clearKey = () => {
   KEY = ''
-  localStorage.removeItem('tinbase_service_key')
+  sessionStorage.removeItem(KEY_STORAGE)
 }
 
 /**
@@ -66,11 +70,31 @@ async function reqRest(path: string, opts: RequestInit = {}, schema?: string): P
   return fetch(`${BASE}${path}`, { ...opts, headers: { ...restHeaders(), ...profile, ...(opts.headers as object) } })
 }
 
+/** Error carrying the HTTP status, so callers can distinguish auth vs transient failures. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+/** Parse `text` as JSON, tolerating an empty or non-JSON body. */
+function parseJson(text: string): any {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
 async function jsonOrThrow(res: Response): Promise<any> {
-  const text = await res.text()
-  const body = text ? JSON.parse(text) : null
+  const body = parseJson(await res.text())
   if (!res.ok) {
-    throw new Error(body?.error || body?.message || body?.msg || `HTTP ${res.status}`)
+    throw new ApiError(body?.error || body?.message || body?.msg || `HTTP ${res.status}`, res.status)
   }
   return body
 }
@@ -158,7 +182,7 @@ export const api = {
   sql: (query: string, opts?: { role?: string; claims?: Record<string, unknown> }) =>
     req('/admin/v1/sql', { method: 'POST', body: JSON.stringify({ query, role: opts?.role, claims: opts?.claims }) }).then(
       async (res) => {
-        const body = await res.json()
+        const body = parseJson(await res.text()) ?? { error: `HTTP ${res.status}` }
         return { ok: res.ok, ...body } as {
           ok: boolean
           rows?: any[]

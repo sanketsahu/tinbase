@@ -236,31 +236,38 @@ export class RealtimeEngine {
       return
     }
 
-    switch (msg.event) {
-      case 'phx_join':
-        await this.handleJoin(conn, msg)
-        break
-      case 'phx_leave':
-        this.leaveChannel(conn, msg.topic)
-        this.reply(conn, msg, 'ok', {})
-        break
-      case 'broadcast':
-        this.handleBroadcast(conn, msg)
-        break
-      case 'presence':
-        this.handlePresence(conn, msg)
-        break
-      case 'access_token':
-        {
-          // supabase-js setAuth() refreshes the subscriber's token; re-derive ctx
-          const ctx = await this.contextFromToken(msg.payload?.access_token as string | undefined)
-          const channel = conn.channels.get(msg.topic)
-          if (channel) channel.ctx = ctx
-          else for (const c of conn.channels.values()) c.ctx = ctx
-        }
-        break
-      default:
-        break
+    // A handler throwing (e.g. an engine error while resolving the join's
+    // schema) must never become an unhandled rejection out of the floated
+    // onMessage call — reply with a Phoenix error and keep the socket alive.
+    try {
+      switch (msg.event) {
+        case 'phx_join':
+          await this.handleJoin(conn, msg)
+          break
+        case 'phx_leave':
+          this.leaveChannel(conn, msg.topic)
+          this.reply(conn, msg, 'ok', {})
+          break
+        case 'broadcast':
+          this.handleBroadcast(conn, msg)
+          break
+        case 'presence':
+          this.handlePresence(conn, msg)
+          break
+        case 'access_token':
+          {
+            // supabase-js setAuth() refreshes the subscriber's token; re-derive ctx
+            const ctx = await this.contextFromToken(msg.payload?.access_token as string | undefined)
+            const channel = conn.channels.get(msg.topic)
+            if (channel) channel.ctx = ctx
+            else for (const c of conn.channels.values()) c.ctx = ctx
+          }
+          break
+        default:
+          break
+      }
+    } catch (e) {
+      this.reply(conn, msg, 'error', { reason: e instanceof Error ? e.message : String(e) })
     }
   }
 

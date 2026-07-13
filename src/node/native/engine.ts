@@ -6,7 +6,7 @@
  * socket directory (0700), never TCP.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
@@ -40,6 +40,42 @@ function isCompleteInstall(dir: string): boolean {
   return existsSync(join(dir, 'bin', 'postgres')) && existsSync(join(dir, 'share', 'postgres.bki'))
 }
 
+/**
+ * Pinned SHA-256 digests for the tarballs we download, keyed by
+ * `postgresql-<version>-<target>`. A pinned entry is enforced offline (strongest
+ * integrity). For versions/targets not listed here we fall back to the checksum
+ * the release publishes alongside the tarball, which still defends against
+ * truncated downloads and mismatched redirects.
+ */
+const PINNED_SHA256: Record<string, string> = {
+  // theseus-rs/postgresql-binaries 17.7.0 (the DEFAULT_PG_VERSION). Refresh
+  // these from the release *.sha256 files whenever DEFAULT_PG_VERSION changes.
+  'postgresql-17.7.0-x86_64-unknown-linux-gnu': '66ad03281a43624f955c8e16ac975cb0ab751e7edf8ba35308e3b08dd7d065c3',
+  'postgresql-17.7.0-aarch64-unknown-linux-gnu': '89cc2f089880cc8e5e6b7a29387829ec4e4779427855bc0b9fa187c8fce33c8b',
+  'postgresql-17.7.0-x86_64-apple-darwin': '0dd8c25173524bad4ae8ef6b970da1ac40f4c1f231150c416ccb8cd06feff8f2',
+  'postgresql-17.7.0-aarch64-apple-darwin': '727ac08d20a704014a0d51eb3300aa0c8e292c1cf0a1c99d4f4b1002e1420220',
+}
+
+/** Verify `tarball` against a pinned digest, else the release's published .sha256. */
+async function verifyTarball(tarball: string, key: string, url: string): Promise<void> {
+  const actual = createHash('sha256').update(readFileSync(tarball)).digest('hex')
+  const pinned = PINNED_SHA256[key]
+  if (pinned) {
+    if (actual !== pinned) {
+      throw new Error(`postgres binary checksum mismatch for ${key}: expected ${pinned}, got ${actual}`)
+    }
+    return
+  }
+  // No local pin — verify against the checksum the release publishes.
+  const res = await fetch(`${url}.sha256`)
+  if (!res.ok) throw new Error(`could not fetch checksum for ${key}: HTTP ${res.status}`)
+  const expected = (await res.text()).trim().split(/\s+/)[0].toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(expected)) throw new Error(`malformed published checksum for ${key}`)
+  if (actual !== expected) {
+    throw new Error(`postgres binary checksum mismatch for ${key}: expected ${expected}, got ${actual}`)
+  }
+}
+
 /** Download + unpack Postgres binaries if not already cached (concurrency-safe). Returns the install dir. */
 export async function ensurePostgres(version = DEFAULT_PG_VERSION, cacheDir?: string, log?: (m: string) => void): Promise<string> {
   const t = target()
@@ -63,6 +99,8 @@ export async function ensurePostgres(version = DEFAULT_PG_VERSION, cacheDir?: st
     const res = await fetch(url)
     if (!res.ok) throw new Error(`failed to download ${url}: HTTP ${res.status}`)
     await writeFile(tarball, Buffer.from(await res.arrayBuffer()))
+    // Integrity-check the tarball before executing anything it contains.
+    await verifyTarball(tarball, `postgresql-${version}-${t}`, url)
     mkdirSync(tmpDir, { recursive: true })
     execFileSync('tar', ['xzf', tarball, '-C', tmpDir, '--strip-components=1'])
     if (!isCompleteInstall(tmpDir)) throw new Error('postgres archive extracted incompletely')
@@ -134,6 +172,14 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
   })
   child.on('exit', () => (childExited = true))
 
+  // Best-effort: if this Node process exits without a clean close() (crash,
+  // uncaught signal), take the postgres child down with it so it doesn't
+  // orphan and hold the data dir. Removed in close().
+  const killChild = (): void => {
+    if (!childExited) child.kill('SIGTERM')
+  }
+  process.once('exit', killChild)
+
   const socketPath = join(sockDir, '.s.PGSQL.5432')
   const connect = async (): Promise<PgWireClient> => {
     const deadline = Date.now() + 20_000
@@ -203,6 +249,7 @@ export async function createNativeEngine(opts: NativeEngineOptions): Promise<DbE
       return () => listeners.get(channel)?.delete(cb)
     },
     async close(): Promise<void> {
+      process.removeListener('exit', killChild)
       await main.close().catch(() => {})
       await listener.close().catch(() => {})
       if (!childExited) {

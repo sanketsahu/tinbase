@@ -70,6 +70,8 @@ export interface NetDelivery {
 export class NetService {
   private timer: ReturnType<typeof setInterval> | null = null
   private draining = false
+  /** The in-flight tick, tracked so stop() can drain it before db.close(). */
+  private inFlight: Promise<void> | null = null
 
   constructor(
     private db: Database,
@@ -81,13 +83,22 @@ export class NetService {
 
   start(): void {
     if (this.timer) return
-    this.timer = setInterval(() => void this.tick(), this.tickMs)
+    this.timer = setInterval(() => {
+      this.inFlight = this.tick()
+    }, this.tickMs)
     if (typeof this.timer === 'object' && 'unref' in this.timer) (this.timer as { unref: () => void }).unref()
   }
 
-  stop(): void {
+  /**
+   * Stop the drain loop and wait for any in-flight tick to finish before the
+   * caller closes the database — the single connection busy-loops if closed
+   * while a query is still queued.
+   */
+  async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    await this.inFlight?.catch(() => {})
+    this.inFlight = null
   }
 
   /** Drain any queued requests once (also callable directly in tests). */
@@ -105,7 +116,17 @@ export class NetService {
       } catch {
         return // net.* not present (e.g. the pg-mem subset engine)
       }
-      for (const row of rows) await this.deliver(row)
+      for (const row of rows) {
+        try {
+          await this.deliver(row)
+        } catch (e) {
+          // A malformed row must never poison the loop or reject out of the
+          // setInterval callback — dequeue it with the error recorded instead.
+          const msg = e instanceof Error ? e.message : String(e)
+          await this.record(row.id, null, null, null, null, false, msg)
+          this.onDeliver?.({ id: row.id, method: row.method, url: row.url, timedOut: false, error: msg })
+        }
+      }
     } finally {
       this.draining = false
     }

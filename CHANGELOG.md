@@ -4,6 +4,76 @@ All notable changes to tinbase are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow semver
 (pre-1.0, minor bumps may include breaking changes).
 
+## [Unreleased]
+
+Rebuilds the Studio, adds the backend surface it needs, and adds the guardrails
+and fixes needed to expose tinbase beyond localhost.
+
+### Added
+- Rebuilt Studio (`/_/`) to Supabase-Studio parity: table editor (filters, sort,
+  inline edit, FK nav, RLS/role preview), database (schema visualizer, functions,
+  triggers, enums, indexes, policies, roles, migrations), auth, storage, edge
+  functions, realtime, automations, logs, SQL editor, settings, and a live advisor.
+- Reads a real project's `supabase/config.toml` so pointing tinbase at it needs
+  no new config. One loader honors every setting that maps to a tinbase feature:
+  - `[auth]` / `[auth.email]` / `[auth.mfa]`: signup, confirmations, password
+    length, OTP length + expiry, MFA factor cap, TOTP enroll/verify toggles.
+  - `[auth]`: `site_url`, `jwt_expiry`, `additional_redirect_urls`, `enabled`.
+  - `[auth.rate_limit]`: feeds the auth rate limiter's windows.
+  - `[auth.sessions]`: `timebox` caps session lifetime.
+  - `[auth.external.*]`: OAuth providers (with `env()` resolution).
+  - `[api]`: `schemas` (exposed schemas) and `max_rows` (REST row cap).
+  - `[storage]`: `file_size_limit` and declarative `[storage.buckets.*]`.
+  - `[db.seed]`: `enabled` and `sql_paths`.
+  - `[functions.<name>]`: `enabled`, `verify_jwt`, `entrypoint`.
+
+  config.toml is the committed baseline; live Studio toggles (persisted in
+  `auth.config`) layer on top, and CLI flags still win. Sections for services
+  tinbase doesn't run (SMS, analytics, pooler, ports) are ignored.
+- `dbSchemas`: only listed schemas are reachable through `/rest/v1` for anon/authenticated.
+- Edge-function secrets from `supabase/functions/.env`, managed in the Studio.
+- A demo project (init migration + seed) so a fresh `tinbase start` has data.
+- `uriAllowList` config: extra redirect targets allowed beyond the site origin.
+
+### Security
+When bound to a non-loopback host, tinbase enforces deployment guardrails that
+stay off for local dev:
+- Refuses to start on a weak/default JWT secret or a Vault key derived from one
+  (a warning on loopback). Set `--jwt-secret` and an explicit `vaultKey` first.
+- `redirect_to` must match the site origin or `uriAllowList`, so a crafted
+  magic-link/OAuth link can't send the session elsewhere.
+- Webhooks get the same SSRF egress guard as `net.http_*`.
+
+Always on:
+- Rate limiting on login/signup/otp/recover (`429 over_request_rate_limit`).
+- Studio "run as" SQL runs in a transaction with `SET LOCAL` + bound claims, so
+  role/claims no longer leak across concurrent requests.
+- Native Postgres binaries are checksum-verified before extraction.
+- Signed-URL lifetimes capped at 7 days; keys with `..`/absolute/backslash/NUL rejected.
+- Studio key moved to `sessionStorage`; shell served with CSP + `ETag`.
+
+### Bug Fixes
+- `tinbase db diff` no longer emits invalid DDL when a table is dropped (it
+  referenced constraints/indexes on the vanished table).
+- `gen types` merges overloaded functions into a union (no duplicate keys) and
+  types `interval`/`point` as `string`, not `number`.
+- `int8` beyond 2^53 returns as a string (native engine) instead of losing
+  precision; migrations sort by code unit, not locale.
+- `user.identities` is populated from `auth.identities` (was always `[]`).
+- Health/root endpoints report the real package version (was `0.1.0`).
+- A fresh clone builds with `npm install && npm run build` (`build:admin`
+  now installs the `admin-ui/` dependencies itself).
+
+### Breaking
+- With `dbSchemas` set, anon/authenticated requests into a schema not in the list
+  get a 406 instead of reaching it. Add any non-`public` schema your app uses.
+- `supabase/config.toml` is now read (most of it was ignored before), so auth,
+  `[api]` (schemas, max_rows), `[storage]` (limits, buckets), `[db.seed]`, and
+  `[functions.*]` settings declared there now take effect. Built-in defaults are
+  unchanged, so a project with no config.toml behaves as before; CLI flags still
+  override config.toml. Notably, `[api].schemas` now drives the exposed-schema
+  allowlist and `[api].max_rows` caps REST reads.
+
 ## [0.9.0] — 2026-07-11
 
 A security hardening pass and a set of GDPR / compliance building blocks. Based
@@ -264,6 +334,10 @@ Earlier tagged previews: the core Supabase-compatible surface — REST (PostgRES
 grammar), Auth (GoTrue), Storage, Realtime, RLS, migrations, and the single-file
 binary — on the PGlite (wasm) and native Postgres engines.
 
+[Unreleased]: https://github.com/tinbase/tinbase/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tinbase/tinbase/releases/tag/v0.9.0
+[0.8.1]: https://github.com/tinbase/tinbase/releases/tag/v0.8.1
+[0.8.0]: https://github.com/tinbase/tinbase/releases/tag/v0.8.0
 [0.7.1]: https://github.com/tinbase/tinbase/releases/tag/v0.7.1
 [0.7.0]: https://github.com/tinbase/tinbase/releases/tag/v0.7.0
 [0.6.1]: https://github.com/tinbase/tinbase/releases/tag/v0.6.1

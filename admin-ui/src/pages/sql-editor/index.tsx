@@ -169,10 +169,16 @@ export function SqlEditor() {
         : role.kind === 'anon'
           ? { role: 'anon', claims: { role: 'anon' } }
           : { role: 'authenticated', claims: { role: 'authenticated', sub: role.sub, email: role.email } }
-    const res = await api.sql(applyLimit(sql, limit), opts)
-    setResult(res)
-    setHistory(pushHistory({ sql, ts: Date.now(), ms: res.ms, ok: res.ok, rows: res.rowCount }))
-    setBusy(false)
+    try {
+      const res = await api.sql(applyLimit(sql, limit), opts)
+      setResult(res)
+      setHistory(pushHistory({ sql, ts: Date.now(), ms: res.ms, ok: res.ok, rows: res.rowCount }))
+    } catch (e) {
+      // network-level failure — surface it and never leave the Run button stuck
+      setResult({ ok: false, error: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
   }
 
   const q = search.toLowerCase()

@@ -1,6 +1,6 @@
 import { quoteIdent, quoteLiteral, type Database, type FunctionInfo } from '../db/database.js'
-import { ApiError, type RequestContext } from '../types.js'
-import { QueryBuilder, pgArrayLiteral, renderColumnExpr } from './build.js'
+import { ApiError, TINBASE_VERSION, type RequestContext } from '../types.js'
+import { QueryBuilder, pgArrayLiteral, renderColumnExpr, sanitizeCast } from './build.js'
 import { errorToResponse, jsonResponse } from './errors.js'
 import { ParseError, parseQuery, type ParsedQuery } from './parse.js'
 
@@ -29,18 +29,21 @@ const OBJECT_MEDIA = 'application/vnd.pgrst.object+json'
 export class RestHandler {
   /** Schemas reachable through the Data API for non-privileged roles (PostgREST db-schemas). */
   private exposedSchemas: string[]
+  /** Max rows a read returns (PostgREST db-max-rows). Undefined = unlimited. */
+  private maxRows?: number
 
   constructor(
     private db: Database,
-    opts?: { exposedSchemas?: string[] }
+    opts?: { exposedSchemas?: string[]; maxRows?: number }
   ) {
     this.exposedSchemas = opts?.exposedSchemas ?? ['public']
+    this.maxRows = opts?.maxRows
   }
 
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
     try {
       const rest = url.pathname.replace(/^\/rest\/v1\/?/, '')
-      if (rest === '') return jsonResponse(200, { info: { title: 'tinbase', version: '0.1.0' } })
+      if (rest === '') return jsonResponse(200, { info: { title: 'tinbase', version: TINBASE_VERSION } })
 
       const method = req.method.toUpperCase()
       const schema =
@@ -83,6 +86,12 @@ export class RestHandler {
     const prefer = parsePrefer(req.headers.get('prefer'))
     const wantsObject = (req.headers.get('accept') ?? '').includes(OBJECT_MEDIA)
     const q = parseQuery(url.searchParams)
+    // db-max-rows: cap the base read limit so a client can't pull more than the
+    // configured maximum (PostgREST's api.max_rows). count still reflects the total.
+    if (this.maxRows !== undefined && (method === 'GET' || method === 'HEAD')) {
+      const requested = q.limits.get('')
+      q.limits.set('', requested === undefined ? this.maxRows : Math.min(requested, this.maxRows))
+    }
     const info = await this.db.getSchemaInfo(schema)
     const builder = new QueryBuilder(schema, info, q, { aliasMutations: !this.db.engine.minimalBootstrap })
 
@@ -285,6 +294,27 @@ export class RestHandler {
     const call = renderCall(schema, fn, args)
     const q = parseQuery(searchParams)
 
+    // A VOLATILE function may have run DDL (create/alter/drop), so drop the
+    // schema/function caches afterwards — otherwise REST keeps serving a stale
+    // shape until the next migration.
+    if (fn.volatility === 'v') {
+      return await this.runRpc(ctx, fn, call, q, prefer, wantsObject, schema, method).finally(() =>
+        this.db.invalidateSchemaCache()
+      )
+    }
+    return await this.runRpc(ctx, fn, call, q, prefer, wantsObject, schema, method)
+  }
+
+  private async runRpc(
+    ctx: RequestContext,
+    fn: FunctionInfo,
+    call: string,
+    q: ReturnType<typeof parseQuery>,
+    prefer: ReturnType<typeof parsePrefer>,
+    wantsObject: boolean,
+    schema: string,
+    method: string
+  ): Promise<Response> {
     // void
     if (fn.returnType === 'void' && !fn.returnsSet) {
       await this.db.withContext(ctx, (query) => query(`select ${call}`, []))
@@ -319,7 +349,7 @@ export class RestHandler {
         exprs.push(`${quoteIdent(alias)}.*`)
       } else {
         const out = item.alias ?? item.name.split(/->>|->/).pop()!.trim()
-        const cast = item.cast ? `::${item.cast}` : ''
+        const cast = item.cast ? `::${sanitizeCast(item.cast)}` : ''
         exprs.push(`${renderColumnExpr(alias, item.name)}${cast} as ${quoteIdent(out)}`)
       }
     }

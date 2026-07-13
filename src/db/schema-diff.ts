@@ -157,19 +157,31 @@ export function diffSchemas(from: SchemaSnapshot, to: SchemaSnapshot, schema = '
   }
 
   // ── dropped tables ──
+  // `drop table` cascades the table's own constraints and indexes, so the
+  // constraint/index diffs below must skip anything on a table dropped here —
+  // otherwise they emit `alter table … drop constraint` against a table that no
+  // longer exists, and the generated migration fails to apply.
+  const droppedTables = new Set<string>()
   for (const name of from.tables.keys()) {
-    if (!to.tables.has(name)) out.push(`drop table ${tbl(name)};`)
+    if (!to.tables.has(name)) {
+      out.push(`drop table ${tbl(name)};`)
+      droppedTables.add(name)
+    }
   }
 
   // ── constraints (drop changed/removed, then add new) ──
   diffNamed(from.constraints, to.constraints, {
-    drop: (table, cname) => out.push(`alter table ${tbl(table)} drop constraint ${q(cname)};`),
+    drop: (table, cname) => {
+      if (!droppedTables.has(table)) out.push(`alter table ${tbl(table)} drop constraint ${q(cname)};`)
+    },
     add: (table, cname, def) => out.push(`alter table ${tbl(table)} add constraint ${q(cname)} ${def};`),
   })
 
   // ── indexes (drop changed/removed, then add new) ──
   diffNamed(from.indexes, to.indexes, {
-    drop: (_table, iname) => out.push(`drop index ${q(schema)}.${q(iname)};`),
+    drop: (table, iname) => {
+      if (!droppedTables.has(table)) out.push(`drop index ${q(schema)}.${q(iname)};`)
+    },
     add: (_table, _iname, def) => out.push(`${def};`),
   })
 

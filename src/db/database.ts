@@ -47,6 +47,8 @@ export interface FunctionInfo {
   returnType: string
   /** pg_type.typtype: b=base, c=composite, p=pseudo, d=domain, e=enum */
   returnTypType: string
+  /** pg_proc.provolatile: v=volatile, s=stable, i=immutable. Volatile calls may run DDL. */
+  volatility: string
   args: FunctionArg[]
 }
 
@@ -131,7 +133,10 @@ export class Database {
 
   async runMigrations(migrations: MigrationFile[], seedSql?: string): Promise<string[]> {
     const applied: string[] = []
-    const sorted = [...migrations].sort((a, b) => a.name.localeCompare(b.name))
+    // Plain code-unit comparison (not localeCompare, which is locale-dependent
+    // and can reorder `_`/digits) so migrations apply in the same order on every
+    // machine, matching the Supabase CLI's lexicographic version ordering.
+    const sorted = [...migrations].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     for (const m of sorted) {
       const version = m.name.match(/^(\d+)/)?.[1] ?? m.name
       const seen = await this.engine.query(
@@ -347,10 +352,12 @@ export class Database {
       returns_set: boolean
       return_type: string
       return_typtype: string
+      volatility: string
       identity_args: string
     }>(
       `select p.proname as name, p.proretset as returns_set,
               t.typname as return_type, t.typtype as return_typtype,
+              p.provolatile as volatility,
               pg_get_function_identity_arguments(p.oid) as identity_args
        from pg_proc p
        join pg_namespace n on n.oid = p.pronamespace
@@ -364,6 +371,7 @@ export class Database {
       returnsSet: r.returns_set,
       returnType: r.return_type,
       returnTypType: r.return_typtype,
+      volatility: r.volatility,
       args: parseIdentityArgs(r.identity_args),
     }))
     this.fnCache.set(key, fns)
@@ -452,7 +460,7 @@ export class Database {
 }
 
 /** Parse pg_get_function_identity_arguments output: "a integer, b text[]". */
-function parseIdentityArgs(identity: string): FunctionArg[] {
+export function parseIdentityArgs(identity: string): FunctionArg[] {
   if (!identity.trim()) return []
   const parts: string[] = []
   let depth = 0

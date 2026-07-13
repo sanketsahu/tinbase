@@ -17,6 +17,16 @@ export interface AuthSettings {
   minPasswordLength: number
   /** Configured OAuth providers the operator has switched off at runtime. */
   disabledProviders: string[]
+  /** Digits in emailed OTP codes (config.toml auth.email.otp_length; 6–10). */
+  otpLength: number
+  /** OTP / magic-link lifetime in seconds (auth.email.otp_expiry). */
+  otpExpirySeconds: number
+  /** Max MFA factors a user may enroll (auth.mfa.max_enrolled_factors). */
+  maxEnrolledFactors: number
+  /** Allow TOTP enrollment (auth.mfa.totp.enroll_enabled). */
+  totpEnrollEnabled: boolean
+  /** Allow TOTP verification/challenge (auth.mfa.totp.verify_enabled). */
+  totpVerifyEnabled: boolean
 }
 
 export const DEFAULT_AUTH_SETTINGS: AuthSettings = {
@@ -25,6 +35,11 @@ export const DEFAULT_AUTH_SETTINGS: AuthSettings = {
   autoconfirm: true,
   minPasswordLength: 6,
   disabledProviders: [],
+  otpLength: 6,
+  otpExpirySeconds: 3600,
+  maxEnrolledFactors: 10,
+  totpEnrollEnabled: true,
+  totpVerifyEnabled: true,
 }
 
 /** Clamp/typecheck a stored or patched settings object into a valid one. */
@@ -39,6 +54,17 @@ function sanitize(raw: Record<string, unknown>): AuthSettings {
   if (Array.isArray(raw.disabledProviders)) {
     s.disabledProviders = raw.disabledProviders.filter((p): p is string => typeof p === 'string').slice(0, 50)
   }
+  if (typeof raw.otpLength === 'number' && Number.isFinite(raw.otpLength)) {
+    s.otpLength = Math.max(6, Math.min(10, Math.floor(raw.otpLength)))
+  }
+  if (typeof raw.otpExpirySeconds === 'number' && Number.isFinite(raw.otpExpirySeconds) && raw.otpExpirySeconds > 0) {
+    s.otpExpirySeconds = Math.floor(raw.otpExpirySeconds)
+  }
+  if (typeof raw.maxEnrolledFactors === 'number' && Number.isFinite(raw.maxEnrolledFactors) && raw.maxEnrolledFactors > 0) {
+    s.maxEnrolledFactors = Math.floor(raw.maxEnrolledFactors)
+  }
+  if (typeof raw.totpEnrollEnabled === 'boolean') s.totpEnrollEnabled = raw.totpEnrollEnabled
+  if (typeof raw.totpVerifyEnabled === 'boolean') s.totpVerifyEnabled = raw.totpVerifyEnabled
   return s
 }
 

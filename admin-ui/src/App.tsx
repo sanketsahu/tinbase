@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, clearKey, getKey } from './api'
+import { api, ApiError, clearKey, getKey } from './api'
 import { AdvisorHost } from './components/advisor'
 import { CommandPalette, Header, Login, Sidebar } from './components/layout'
 import { Toaster } from './components/ui'
@@ -27,9 +27,13 @@ export function App() {
 
   useEffect(() => {
     if (!getKey()) return
-    api.ping().catch(() => {
-      clearKey()
-      setAuthed(false)
+    // Only drop the stored key when the server actively rejects it (401/403).
+    // A transient failure (server restarting, network blip) keeps the session.
+    api.ping().catch((e) => {
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+        clearKey()
+        setAuthed(false)
+      }
     })
   }, [])
 

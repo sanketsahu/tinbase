@@ -100,6 +100,10 @@ async function toRequest(req: IncomingMessage, fallbackHost: string): Promise<Re
     if (Array.isArray(value)) for (const v of value) headers.append(key, v)
     else headers.set(key, value)
   }
+  // Expose the connecting client's address to the fetch handler (rate limiting)
+  // without trusting a client-supplied x-forwarded-for header.
+  const remote = req.socket.remoteAddress
+  if (remote) headers.set('x-tinbase-remote-addr', remote)
   let body: Buffer | undefined
   if (method !== 'GET' && method !== 'HEAD') {
     const chunks: Buffer[] = []

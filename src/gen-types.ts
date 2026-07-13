@@ -13,7 +13,7 @@
  *     }
  *   }
  */
-import type { Database } from './db/database.js'
+import { parseIdentityArgs, type Database } from './db/database.js'
 
 interface ColumnRow {
   table_name: string
@@ -106,18 +106,34 @@ export async function generateTypes(db: Database, schema = 'public'): Promise<st
     return `      ${ident(name)}: {\n        Row: {\n${row}\n        }\n        Relationships: []\n      }`
   }
 
-  const fnBlock = (f: FnRow): string => {
-    const args =
-      !f.args_json || f.args_json.length === 0
-        ? 'Record<PropertyKey, never>'
-        : `{\n${f.args_json.map((a) => `          ${ident(a.name || '')}: ${mapArgType(a.type, enumNames, schema)}`).join('\n')}\n        }`
-    const returns = f.return_typtype === 'c' || f.returns_set ? 'Json' : mapType(f.return_type, enumNames, schema)
-    return `      ${ident(f.name)}: {\n        Args: ${args}\n        Returns: ${returns}\n      }`
+  // Args/Returns for one function row (an overload). Multiple rows sharing a
+  // name are merged into a union below so the emitted type never has duplicate
+  // keys — matching the official generator.
+  const fnArgs = (f: FnRow): string =>
+    !f.args_json || f.args_json.length === 0
+      ? 'Record<PropertyKey, never>'
+      : `{ ${f.args_json.map((a) => `${ident(a.name || '')}: ${mapArgType(a.type, enumNames, schema)}`).join('; ')} }`
+  const fnReturns = (f: FnRow): string => (f.return_typtype === 'c' || f.returns_set ? 'Json' : mapType(f.return_type, enumNames, schema))
+  const fnShape = (f: FnRow): string => `{ Args: ${fnArgs(f)}; Returns: ${fnReturns(f)} }`
+
+  const fnBlock = (name: string, overloads: FnRow[]): string => {
+    if (overloads.length === 1) {
+      const f = overloads[0]
+      return `      ${ident(name)}: {\n        Args: ${fnArgs(f)}\n        Returns: ${fnReturns(f)}\n      }`
+    }
+    return `      ${ident(name)}:\n        | ${overloads.map(fnShape).join('\n        | ')}`
+  }
+
+  const fnsByName = new Map<string, FnRow[]>()
+  for (const f of fns) {
+    const group = fnsByName.get(f.name)
+    if (group) group.push(f)
+    else fnsByName.set(f.name, [f])
   }
 
   const tablesBlock = [...tables].map(([n, c]) => tableBlock(n, c)).join('\n')
   const viewsBlock = [...views].map(([n, c]) => viewBlock(n, c)).join('\n')
-  const fnsBlock = fns.map(fnBlock).join('\n')
+  const fnsBlock = [...fnsByName].map(([n, o]) => fnBlock(n, o)).join('\n')
   const enumsBlock = enums.map((e) => `      ${ident(e.name)}: ${e.labels.map((l) => JSON.stringify(l)).join(' | ')}`).join('\n')
 
   return `export type Json =
@@ -190,12 +206,14 @@ function mapType(udt: string, enums: Set<string>, schema: string): string {
 }
 
 function mapArgType(type: string, enums: Set<string>, schema: string): string {
-  // pg_get_function_identity_arguments gives sql type names, not udt; normalize
+  // pg_get_function_identity_arguments gives sql type names, not udt; normalize.
+  // Anchor the numeric match so types like `interval` and `point` (which merely
+  // contain "int") are not mistyped as number.
   const t = type.toLowerCase().trim()
   if (t.endsWith('[]')) return `${mapArgType(t.slice(0, -2), enums, schema)}[]`
-  if (/int|serial|numeric|decimal|real|double|float/.test(t)) return 'number'
-  if (/bool/.test(t)) return 'boolean'
-  if (/json/.test(t)) return JSON_TYPE
+  if (/^(big|small)?int/.test(t) || /^(serial|bigserial|smallserial|numeric|decimal|real|double|float)/.test(t)) return 'number'
+  if (/^bool/.test(t)) return 'boolean'
+  if (/^json/.test(t)) return JSON_TYPE
   return 'string'
 }
 
@@ -255,28 +273,6 @@ async function loadFunctions(db: Database, schema: string): Promise<FnRow[]> {
     return_type: r.return_type,
     returns_set: r.returns_set,
     return_typtype: r.return_typtype,
-    args_json: parseArgs(r.identity_args),
+    args_json: parseIdentityArgs(r.identity_args),
   }))
-}
-
-function parseArgs(identity: string): { name: string; type: string }[] {
-  if (!identity?.trim()) return []
-  const parts: string[] = []
-  let depth = 0
-  let cur = ''
-  for (const ch of identity) {
-    if (ch === '(') depth++
-    if (ch === ')') depth--
-    if (ch === ',' && depth === 0) {
-      parts.push(cur)
-      cur = ''
-    } else cur += ch
-  }
-  if (cur.trim()) parts.push(cur)
-  return parts.map((p) => {
-    const toks = p.trim().split(/\s+/)
-    while (toks.length > 1 && ['IN', 'OUT', 'INOUT', 'VARIADIC'].includes(toks[0])) toks.shift()
-    if (toks.length === 1) return { name: '', type: toks[0] }
-    return { name: toks[0].replace(/^"|"$/g, ''), type: toks.slice(1).join(' ') }
-  })
 }

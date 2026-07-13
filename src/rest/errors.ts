@@ -2,7 +2,7 @@ import { ApiError } from '../types.js'
 import { ParseError } from './parse.js'
 
 /** HTTP status for a Postgres SQLSTATE, following PostgREST's mapping. */
-function statusForSqlState(code: string): number {
+export function statusForSqlState(code: string): number {
   switch (code) {
     case '42501':
       return 403

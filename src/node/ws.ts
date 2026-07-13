@@ -9,6 +9,12 @@ import type { RealtimeSocketLike } from '../realtime/engine.js'
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
+/** Largest inbound frame payload accepted before the connection is failed (RFC 6455 §7.4.1, 1009). */
+const MAX_FRAME_BYTES = 64 * 1024 * 1024
+
+/** Returned by {@link decodeFrame} when a frame declares a payload larger than {@link MAX_FRAME_BYTES}. */
+export const FRAME_TOO_LARGE = Symbol('frame-too-large')
+
 export interface WsConnection extends RealtimeSocketLike {
   onMessage: ((data: string | Uint8Array) => void) | null
   onClose: (() => void) | null
@@ -78,6 +84,10 @@ export function acceptWebSocket(req: IncomingMessage, socket: Duplex, head: Buff
   function processFrames(): void {
     while (true) {
       const frame = decodeFrame(buffer)
+      if (frame === FRAME_TOO_LARGE) {
+        conn.close(1009, 'frame too large')
+        return
+      }
       if (!frame) return
       buffer = buffer.subarray(frame.frameLength)
 
@@ -132,7 +142,7 @@ interface Frame {
   frameLength: number
 }
 
-export function decodeFrame(buf: Buffer): Frame | null {
+export function decodeFrame(buf: Buffer): Frame | null | typeof FRAME_TOO_LARGE {
   if (buf.length < 2) return null
   const fin = (buf[0] & 0x80) !== 0
   const opcode = buf[0] & 0x0f
@@ -147,7 +157,7 @@ export function decodeFrame(buf: Buffer): Frame | null {
   } else if (payloadLength === 127) {
     if (buf.length < offset + 8) return null
     const big = buf.readBigUInt64BE(offset)
-    if (big > BigInt(64 * 1024 * 1024)) throw new Error('frame too large')
+    if (big > BigInt(MAX_FRAME_BYTES)) return FRAME_TOO_LARGE
     payloadLength = Number(big)
     offset += 8
   }

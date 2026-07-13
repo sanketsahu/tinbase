@@ -298,7 +298,13 @@ function decodeValue(text: string, oid: number): unknown {
   switch (oid) {
     case 16: // bool
       return text === 't'
-    case 20: // int8
+    case 20: {
+      // int8: values beyond 2^53 lose precision as a JS number — return the
+      // string in that range (matching node-postgres' default) so large ids
+      // (snowflake, long-lived pgmq msg_ids) survive intact.
+      const n = Number(text)
+      return Number.isSafeInteger(n) ? n : text
+    }
     case 21: // int2
     case 23: // int4
     case 26: // oid

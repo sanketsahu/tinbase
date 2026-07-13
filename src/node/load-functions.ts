@@ -34,7 +34,18 @@ export async function loadFunctionEnv(projectDir: string): Promise<Record<string
   return env
 }
 
-export async function loadFunctions(projectDir: string): Promise<Map<string, EdgeFunction>> {
+/** Per-function options from config.toml [functions.<name>]. */
+export interface LoadFunctionOptions {
+  /** Skip loading when explicitly disabled. */
+  enabled?: boolean
+  /** Custom entrypoint path, relative to the project root. */
+  entrypoint?: string
+}
+
+export async function loadFunctions(
+  projectDir: string,
+  options: Record<string, LoadFunctionOptions> = {}
+): Promise<Map<string, EdgeFunction>> {
   const functions = new Map<string, EdgeFunction>()
   const root = join(projectDir, 'supabase', 'functions')
 
@@ -50,10 +61,14 @@ export async function loadFunctions(projectDir: string): Promise<Map<string, Edg
 
   for (const name of entries) {
     if (name.startsWith('_') || name.startsWith('.')) continue
+    if (options[name]?.enabled === false) continue // disabled in config.toml
     const dir = join(root, name)
     if (!(await stat(dir)).isDirectory()) continue
-    for (const file of ['index.ts', 'index.tsx', 'index.js', 'index.mjs']) {
-      const path = join(dir, file)
+    // A config.toml entrypoint overrides the default index.* discovery.
+    const candidates = options[name]?.entrypoint
+      ? [join(projectDir, options[name].entrypoint!)]
+      : ['index.ts', 'index.tsx', 'index.js', 'index.mjs'].map((f) => join(dir, f))
+    for (const path of candidates) {
       try {
         await stat(path)
       } catch {

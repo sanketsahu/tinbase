@@ -4,26 +4,47 @@
  */
 import type { Database } from '../db/database.js'
 import { randomToken, signJwt, verifyJwt, type JwtClaims } from '../jwt.js'
-import type { Mailer, RequestContext } from '../types.js'
+import { TINBASE_VERSION, type Mailer, type RequestContext } from '../types.js'
 import { OAuthService, type OAuthProviderConfig } from './oauth.js'
 import { hashPassword, verifyPassword } from './password.js'
 import { qrSvgDataUri } from './qr.js'
 import { DEFAULT_AUTH_SETTINGS, type AuthSettings } from './settings.js'
+import { resolveRedirect } from './redirect.js'
+import { RateLimiter } from './rate-limit.js'
 import { generateTotpSecret, otpauthUri, verifyTotp } from './totp.js'
 
 export interface AuthConfig {
   jwtSecret: string
   siteUrl: string
   jwtExpiry: number
+  /** Force sign-out after this many seconds (config.toml auth.sessions.timebox). Caps session lifetime. */
+  sessionTimeboxSeconds?: number
   mailer: Mailer
   oauthProviders?: Record<string, OAuthProviderConfig>
   /** injectable fetch for the OAuth provider calls (tests use a mock provider) */
   oauthFetch?: typeof fetch
   /**
+   * Additional redirect targets allowed beyond the site URL's own origin
+   * (GoTrue's URI_ALLOW_LIST). Entries may use `*`/`**` globs. A `redirect_to`
+   * that matches neither the site origin nor an entry falls back to the site URL.
+   */
+  uriAllowList?: string[]
+  /**
+   * Enforce the redirect allowlist strictly. Off for local dev (any well-formed
+   * URL is honored, like `supabase start`); the backend turns it on when
+   * network-exposed so redirects can't leave the allowed origins.
+   */
+  enforceRedirectAllowList?: boolean
+  /**
    * Runtime-mutable toggles (signups, anonymous users, autoconfirm…). The
    * admin API mutates this same object in place, so changes apply instantly.
    */
   settings?: AuthSettings
+  /**
+   * Rate limiter for login/signup/OTP/recovery. Defaults to a fresh in-memory
+   * limiter with GoTrue-shaped windows; pass `null` to disable (e.g. tests).
+   */
+  rateLimiter?: RateLimiter | null
 }
 
 interface UserRow {
@@ -47,6 +68,16 @@ function authError(status: number, errorCode: string, msg: string): Response {
   return json(status, { code: status, error_code: errorCode, msg })
 }
 
+/** A cryptographically-random numeric OTP of `length` digits (6–10). */
+function randomOtp(length: number): string {
+  const n = Math.max(6, Math.min(10, Math.floor(length)))
+  const buf = new Uint32Array(n)
+  crypto.getRandomValues(buf)
+  let code = ''
+  for (let i = 0; i < n; i++) code += String(buf[i] % 10)
+  return code
+}
+
 function json(status: number, body: unknown): Response {
   return new Response(status === 204 ? null : JSON.stringify(body), {
     status,
@@ -63,13 +94,42 @@ export class AuthHandler {
   private oauth: OAuthService
   /** Shared, runtime-mutable settings — read on every request, never copied. */
   private settings: AuthSettings
+  private rateLimiter: RateLimiter | null
 
   constructor(
     private db: Database,
     private config: AuthConfig
   ) {
-    this.oauth = new OAuthService(db, config.siteUrl, config.oauthProviders ?? {}, config.oauthFetch ?? fetch)
+    this.oauth = new OAuthService(
+      db,
+      config.siteUrl,
+      config.oauthProviders ?? {},
+      config.oauthFetch ?? fetch,
+      config.uriAllowList,
+      config.enforceRedirectAllowList
+    )
     this.settings = config.settings ?? { ...DEFAULT_AUTH_SETTINGS }
+    this.rateLimiter = config.rateLimiter === undefined ? new RateLimiter() : config.rateLimiter
+  }
+
+  /**
+   * Enforce the rate limit for `action`, keyed by client address. Returns a 429
+   * (GoTrue's `over_request_rate_limit`) when exceeded, else null to proceed.
+   */
+  private limit(action: string, req: Request): Response | null {
+    if (!this.rateLimiter) return null
+    const client = req.headers.get('x-tinbase-remote-addr') ?? 'local'
+    const retryAfter = this.rateLimiter.check(action, client)
+    if (retryAfter === null) return null
+    return new Response(
+      JSON.stringify({ code: 429, error_code: 'over_request_rate_limit', msg: 'Request rate limit reached' }),
+      { status: 429, headers: { 'content-type': 'application/json; charset=utf-8', 'retry-after': String(retryAfter) } }
+    )
+  }
+
+  /** Stop background timers (rate-limiter sweep). Called on backend close. */
+  stop(): void {
+    this.rateLimiter?.stop()
   }
 
   async handle(req: Request, ctx: RequestContext, url: URL): Promise<Response> {
@@ -77,7 +137,7 @@ export class AuthHandler {
     const method = req.method.toUpperCase()
 
     try {
-      if (path === 'health') return json(200, { name: 'tinbase-auth', version: '0.1.0', description: 'GoTrue-compatible auth' })
+      if (path === 'health') return json(200, { name: 'tinbase-auth', version: TINBASE_VERSION, description: 'GoTrue-compatible auth' })
       if (path === 'settings') {
         const providers = Object.keys(this.config.oauthProviders ?? {})
         return json(200, {
@@ -93,14 +153,15 @@ export class AuthHandler {
           minimum_password_length: this.settings.minPasswordLength,
         })
       }
-      if (path === 'signup' && method === 'POST') return await this.signup(req)
-      if (path === 'token' && method === 'POST') return await this.token(req, url)
+      if (path === 'signup' && method === 'POST') return this.limit('signup', req) ?? (await this.signup(req))
+      if (path === 'token' && method === 'POST') return this.limit('token', req) ?? (await this.token(req, url))
       if (path === 'user' && method === 'GET') return await this.getUser(req)
       if (path === 'user' && method === 'PUT') return await this.updateUser(req)
       if (path === 'logout' && method === 'POST') return await this.logout(req)
-      if (path === 'otp' && method === 'POST') return await this.sendOtp(req)
-      if (path === 'recover' && method === 'POST') return await this.sendRecovery(req)
-      if (['magiclink', 'resend'].includes(path) && method === 'POST') return await this.sendOtp(req)
+      if (path === 'otp' && method === 'POST') return this.limit('otp', req) ?? (await this.sendOtp(req))
+      if (path === 'recover' && method === 'POST') return this.limit('recover', req) ?? (await this.sendRecovery(req))
+      if (['magiclink', 'resend'].includes(path) && method === 'POST')
+        return this.limit('otp', req) ?? (await this.sendOtp(req))
       if (path === 'verify' && method === 'POST') return await this.verifyToken(req)
       if (path === 'verify' && method === 'GET') return await this.verifyLink(url)
       if (path === 'factors' && method === 'POST') return await this.enrollFactor(req)
@@ -241,7 +302,7 @@ export class AuthHandler {
   private async getUser(req: Request): Promise<Response> {
     const user = await this.userFromBearer(req)
     if (!user) return authError(401, 'no_authorization', 'Invalid or expired token')
-    return json(200, this.userJson(user, await this.getUserFactors(user.id)))
+    return json(200, this.userJson(user, await this.getUserFactors(user.id), await this.getUserIdentities(user.id)))
   }
 
   private async updateUser(req: Request): Promise<Response> {
@@ -332,13 +393,14 @@ export class AuthHandler {
       )
       user = res.rows[0] as UserRow
     }
-    const code = String(Math.floor(100000 + Math.random() * 900000))
+    const code = randomOtp(this.settings.otpLength)
     const linkToken = randomToken(24)
+    const expiry = `${this.settings.otpExpirySeconds} seconds`
     await this.db.query(`delete from auth.one_time_tokens where email = $1 and token_type = $2`, [normalized, tokenType])
     await this.db.query(
       `insert into auth.one_time_tokens (user_id, email, token_type, token, expires_at)
-       values ($1, $2, $3, $4, now() + interval '15 minutes'), ($1, $2, $5, $6, now() + interval '15 minutes')`,
-      [user.id, normalized, tokenType, code, tokenType === 'otp' ? 'magiclink' : tokenType, linkToken]
+       values ($1, $2, $3, $4, now() + $7::interval), ($1, $2, $5, $6, now() + $7::interval)`,
+      [user.id, normalized, tokenType, code, tokenType === 'otp' ? 'magiclink' : tokenType, linkToken, expiry]
     )
     const kind = tokenType === 'otp' ? 'magiclink' : tokenType
     const link = `${this.config.siteUrl}/auth/v1/verify?token=${linkToken}&type=${kind}`
@@ -423,7 +485,15 @@ export class AuthHandler {
   private async verifyLink(url: URL): Promise<Response> {
     const token = url.searchParams.get('token') ?? ''
     const type = url.searchParams.get('type') ?? 'magiclink'
-    const redirectTo = url.searchParams.get('redirect_to') ?? this.config.siteUrl
+    // Never redirect (with the freshly minted session tokens) to an origin the
+    // operator hasn't allowed — a crafted magic-link would otherwise exfiltrate
+    // the session. Unknown targets fall back to the site URL.
+    const redirectTo = resolveRedirect(
+      url.searchParams.get('redirect_to'),
+      this.config.siteUrl,
+      this.config.uriAllowList,
+      this.config.enforceRedirectAllowList
+    )
     const user = await this.redeem(token, [type])
     if (!user) {
       return new Response(null, { status: 303, headers: { location: `${redirectTo}#error=access_denied&error_code=otp_expired` } })
@@ -643,6 +713,16 @@ export class AuthHandler {
     if (factorType !== 'totp') {
       return authError(422, 'validation_failed', 'Only the totp factor type is supported')
     }
+    if (!this.settings.totpEnrollEnabled) {
+      return authError(422, 'mfa_totp_enroll_disabled', 'TOTP enrollment is disabled')
+    }
+    const enrolled = await this.db.query(
+      `select count(*)::int as n from auth.mfa_factors where user_id = $1`,
+      [user.id]
+    )
+    if ((enrolled.rows[0] as { n: number }).n >= this.settings.maxEnrolledFactors) {
+      return authError(422, 'too_many_enrolled_mfa_factors', 'Maximum number of enrolled MFA factors reached')
+    }
     const friendlyName = body.friendly_name ?? null
     if (friendlyName) {
       const dup = await this.db.query(
@@ -681,6 +761,9 @@ export class AuthHandler {
   private async challengeFactor(req: Request, factorId: string): Promise<Response> {
     const user = await this.userFromBearer(req)
     if (!user) return authError(401, 'no_authorization', 'This endpoint requires a Bearer token')
+    if (!this.settings.totpVerifyEnabled) {
+      return authError(422, 'mfa_totp_verify_disabled', 'TOTP verification is disabled')
+    }
     const fr = await this.db.query(`select id from auth.mfa_factors where id = $1 and user_id = $2`, [factorId, user.id])
     if (fr.rows.length === 0) return authError(404, 'mfa_factor_not_found', 'MFA factor not found')
     const expiresAt = new Date(Date.now() + 300_000).toISOString()
@@ -764,6 +847,25 @@ export class AuthHandler {
     }))
   }
 
+  /** GoTrue-shaped identities for a user (linked providers), from auth.identities. */
+  private async getUserIdentities(userId: string): Promise<Record<string, unknown>[]> {
+    const res = await this.db.query(
+      `select id, provider_id, user_id, identity_data, provider, created_at, updated_at, last_sign_in_at
+       from auth.identities where user_id = $1 order by created_at`,
+      [userId]
+    )
+    return (res.rows as Record<string, unknown>[]).map((r) => ({
+      identity_id: r.id,
+      id: r.provider_id,
+      user_id: r.user_id,
+      identity_data: r.identity_data ?? {},
+      provider: r.provider,
+      last_sign_in_at: iso(r.last_sign_in_at as Date | string | null),
+      created_at: iso(r.created_at as Date | string | null),
+      updated_at: iso(r.updated_at as Date | string | null),
+    }))
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────
 
   private async userFromBearer(req: Request): Promise<UserRow | null> {
@@ -775,7 +877,11 @@ export class AuthHandler {
     return (res.rows[0] as UserRow) ?? null
   }
 
-  userJson(u: UserRow, factors: Record<string, unknown>[] = []): Record<string, unknown> {
+  userJson(
+    u: UserRow,
+    factors: Record<string, unknown>[] = [],
+    identities: Record<string, unknown>[] = []
+  ): Record<string, unknown> {
     return {
       id: u.id,
       aud: u.aud ?? 'authenticated',
@@ -787,7 +893,7 @@ export class AuthHandler {
       last_sign_in_at: iso(u.last_sign_in_at),
       app_metadata: u.raw_app_meta_data ?? {},
       user_metadata: u.raw_user_meta_data ?? {},
-      identities: [],
+      identities,
       factors,
       created_at: iso(u.created_at),
       updated_at: iso(u.updated_at),
@@ -812,7 +918,12 @@ export class AuthHandler {
     opts?: { aal?: string; amr?: { method: string; timestamp: number }[] }
   ): Promise<Record<string, unknown>> {
     const now = Math.floor(Date.now() / 1000)
-    const expiresAt = now + this.config.jwtExpiry
+    // Cap the access-token lifetime at the session timebox so a timeboxed
+    // session can't outlive its absolute deadline (config.toml auth.sessions.timebox).
+    const lifetime = this.config.sessionTimeboxSeconds
+      ? Math.min(this.config.jwtExpiry, this.config.sessionTimeboxSeconds)
+      : this.config.jwtExpiry
+    const expiresAt = now + lifetime
     const sessionId = crypto.randomUUID()
     const claims: JwtClaims = {
       iss: `${this.config.siteUrl}/auth/v1`,
@@ -839,10 +950,10 @@ export class AuthHandler {
     return {
       access_token: accessToken,
       token_type: 'bearer',
-      expires_in: this.config.jwtExpiry,
+      expires_in: lifetime,
       expires_at: expiresAt,
       refresh_token: refreshToken,
-      user: this.userJson(user, await this.getUserFactors(user.id)),
+      user: this.userJson(user, await this.getUserFactors(user.id), await this.getUserIdentities(user.id)),
     }
   }
 }

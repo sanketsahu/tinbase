@@ -14,9 +14,8 @@ import { createBackend, generateTypes, createPgmemEngine, inspectDb } from './in
 import { computeDbDiff, pullSchema, shadowNativeDataDir } from './node/db-diff.js'
 import { createNativeEngine } from './node/native/engine.js'
 import { FsStorageDriver } from './node/fs-driver.js'
-import { loadAuthConfigDefaults } from './node/load-auth-config.js'
+import { loadProjectConfig } from './node/load-config.js'
 import { loadFunctions, loadFunctionEnv } from './node/load-functions.js'
-import { loadOAuthProviders } from './node/load-oauth.js'
 import { loadSupabaseProject } from './node/project.js'
 import { serve, findAvailablePort } from './node/server.js'
 import { serveBun } from './node/bun-server.js'
@@ -248,7 +247,7 @@ async function main(): Promise<void> {
       jwtSecret: opts.jwtSecret,
       migrations: project.migrations,
       seedSql: project.seedSql,
-      authSettings: loadAuthConfigDefaults(opts.dir),
+      authSettings: loadProjectConfig(opts.dir).auth.settings,
       storageDriver: new FsStorageDriver(storageDir),
       log: (m) => console.log(`  ${m}`),
     })
@@ -283,11 +282,10 @@ async function main(): Promise<void> {
     return
   }
 
-  const project = await loadSupabaseProject(opts.dir)
-  const functions = await loadFunctions(opts.dir)
+  const cfg = loadProjectConfig(opts.dir)
+  const project = await loadSupabaseProject(opts.dir, { enabled: cfg.seed.enabled, paths: cfg.seed.paths })
+  const functions = await loadFunctions(opts.dir, cfg.functions)
   const functionEnv = await loadFunctionEnv(opts.dir)
-  const oauthProviders = loadOAuthProviders(opts.dir)
-  const authSettings = loadAuthConfigDefaults(opts.dir)
   const webhooks = loadWebhooks(opts.dir)
   if (opts.dataDir) await mkdir(opts.dataDir, { recursive: true })
   await mkdir(opts.storageDir, { recursive: true })
@@ -328,14 +326,26 @@ async function main(): Promise<void> {
     engine,
     dataDir: opts.memory ? undefined : opts.dataDir,
     jwtSecret: opts.jwtSecret,
-    siteUrl: `http://${opts.host}:${port}`,
+    // config.toml's site_url is what a real project uses for emailed links and
+    // redirects; fall back to the bound address when it's not set. (The server
+    // still binds to --host:--port regardless.)
+    siteUrl: cfg.auth.siteUrl ?? `http://${opts.host}:${port}`,
     host: opts.host,
+    jwtExpiry: cfg.auth.jwtExpiry,
+    uriAllowList: cfg.auth.uriAllowList,
+    authEnabled: cfg.auth.enabled,
+    authSettings: cfg.auth.settings,
+    authRateLimits: cfg.auth.rateLimits,
+    sessionTimeboxSeconds: cfg.auth.sessionTimeboxSeconds,
+    oauthProviders: cfg.auth.oauthProviders,
+    dbSchemas: cfg.api.schemas,
+    maxRows: cfg.api.maxRows,
+    storageFileSizeLimit: cfg.storage.fileSizeLimit,
+    buckets: cfg.storage.buckets,
     migrations: project.migrations,
     seedSql: project.seedSql,
     functions,
     functionEnv,
-    oauthProviders,
-    authSettings,
     webhooks,
     storageDriver: new FsStorageDriver(opts.storageDir),
     log: (msg) => console.log(`  ${msg}`),
@@ -374,7 +384,7 @@ async function main(): Promise<void> {
            Storage: ${opts.storageDir}
         Migrations: ${project.migrations.length} file(s)
          Functions: ${functions.size > 0 ? [...functions.keys()].join(', ') : 'none'}
-    OAuth providers: ${Object.keys(oauthProviders).length ? Object.keys(oauthProviders).join(', ') : 'none'}
+    OAuth providers: ${Object.keys(cfg.auth.oauthProviders).length ? Object.keys(cfg.auth.oauthProviders).join(', ') : 'none'}
           Webhooks: ${webhooks.length ? webhooks.map((w) => w.table).join(', ') : 'none'}
 
           anon key: ${backend.anonKey}

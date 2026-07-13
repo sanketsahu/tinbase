@@ -515,7 +515,7 @@ function defaultAliasFor(raw: string): string {
   return unquote(tokens[tokens.length - 1].trim())
 }
 
-function sanitizeCast(cast: string): string {
+export function sanitizeCast(cast: string): string {
   if (!/^[a-zA-Z_][a-zA-Z0-9_ ]*(\[\])?$/.test(cast)) throw new ParseError(`invalid cast: ${cast}`)
   return cast
 }

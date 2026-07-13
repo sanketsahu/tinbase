@@ -10,6 +10,7 @@
 import { AdminApi } from './admin/api.js'
 import { ADMIN_HTML } from './admin/ui.js'
 import { AuthHandler } from './auth/handler.js'
+import { RateLimiter } from './auth/rate-limit.js'
 import { InboxMailer } from './auth/inbox.js'
 import { loadAuthSettings } from './auth/settings.js'
 import { LogBuffer } from './log-buffer.js'
@@ -26,7 +27,7 @@ import { CronService } from './cron/service.js'
 import { NetService, type NetDelivery } from './net/service.js'
 import { RetentionService } from './retention/service.js'
 import { DEFAULT_JWT_SECRET, type BackendConfig, type Mailer, type MigrationFile, type RequestContext } from './types.js'
-import { assertSecretsSafe } from './security.js'
+import { assertSecretsSafe, isNetworkExposed } from './security.js'
 
 export * from './types.js'
 export { Database } from './db/database.js'
@@ -71,6 +72,30 @@ export interface TinbaseBackend {
   close: () => Promise<void>
 }
 
+/**
+ * Content-Security-Policy for the studio shell. The build inlines all JS/CSS
+ * into one document, so `'unsafe-inline'` is unavoidable for scripts/styles;
+ * everything else is locked to same-origin, `frame-ancestors 'none'` blocks
+ * clickjacking, and `object-src 'none'` blocks plugin content.
+ */
+const ADMIN_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; " +
+  "base-uri 'self'; frame-ancestors 'none'"
+
+/** Stable weak ETag for the (constant) studio HTML, so reloads revalidate to 304. */
+const ADMIN_ETAG = `W/"${fnv1a(ADMIN_HTML)}"`
+
+/** FNV-1a 32-bit hash as an 8-char hex string. Non-cryptographic, ETag-only. */
+function fnv1a(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, '0')
+}
+
 const CORS_HEADERS: Record<string, string> = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD',
@@ -105,9 +130,24 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
   assertSecretsSafe({ host: config.host, jwtSecret, vaultKeyDerived, warn: log })
 
   const db = await Database.create(config.engine ?? config.dataDir, { vaultKey })
-  if (config.migrations?.length || config.seedSql) {
-    const applied = await db.runMigrations(config.migrations ?? [], config.seedSql)
-    if (applied.length > 0) log(`applied migrations: ${applied.join(', ')}`)
+
+  // Anything created after the engine (a running native Postgres child, the
+  // realtime LISTEN, background timers) must be torn down if a later step throws
+  // — e.g. a failing migration — so a construction error never leaks a handle.
+  const cleanup: Array<() => void | Promise<void>> = []
+  const failStartup = async (e: unknown): Promise<never> => {
+    for (const fn of cleanup.reverse()) await Promise.resolve(fn()).catch(() => {})
+    await db.close().catch(() => {})
+    throw e
+  }
+
+  try {
+    if (config.migrations?.length || config.seedSql) {
+      const applied = await db.runMigrations(config.migrations ?? [], config.seedSql)
+      if (applied.length > 0) log(`applied migrations: ${applied.join(', ')}`)
+    }
+  } catch (e) {
+    await failStartup(e)
   }
 
   const now = Math.floor(Date.now() / 1000)
@@ -118,7 +158,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     jwtSecret
   )
 
-  const rest = new RestHandler(db, { exposedSchemas: config.dbSchemas })
+  const rest = new RestHandler(db, { exposedSchemas: config.dbSchemas, maxRows: config.maxRows })
   // With no custom mailer, capture auth emails in an in-memory inbox (viewable
   // at /inbox) and log a metadata-only line. A provided mailer takes over and no
   // inbox is mounted.
@@ -140,35 +180,54 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
   // committed defaults, the persisted auth.config row layers live studio edits
   // on top, and the auth handler reads the merged object per request
   const authSettings = await loadAuthSettings(db, config.authSettings)
+  const storage = new StorageHandler(db, config.storageDriver ?? new MemoryStorageDriver(), {
+    jwtSecret,
+    defaultFileSizeLimit: config.storageFileSizeLimit,
+  })
+  if (config.buckets?.length) await storage.ensureBuckets(config.buckets)
   const auth = new AuthHandler(db, {
     jwtSecret,
     siteUrl,
     jwtExpiry,
+    sessionTimeboxSeconds: config.sessionTimeboxSeconds,
     mailer,
     oauthProviders: config.oauthProviders,
     oauthFetch: config.oauthFetch,
     uriAllowList: config.uriAllowList,
+    enforceRedirectAllowList: isNetworkExposed(config.host),
     settings: authSettings,
+    rateLimiter: new RateLimiter(config.authRateLimits),
   })
-  const storage = new StorageHandler(db, config.storageDriver ?? new MemoryStorageDriver(), { jwtSecret })
+  cleanup.push(() => auth.stop())
+
   const realtime = new RealtimeEngine(db, jwtSecret)
-  await realtime.start()
-
-  const webhooks = new WebhooksService(db, config.webhookFetch, (d: WebhookDelivery) =>
-    log(`[webhook] ${d.event.type} ${d.event.schema}.${d.event.table} -> ${d.webhook.url} ${d.ok ? d.status : 'FAILED ' + (d.error ?? '')}`)
+  const webhooks = new WebhooksService(
+    db,
+    config.webhookFetch,
+    (d: WebhookDelivery) =>
+      log(`[webhook] ${d.event.type} ${d.event.schema}.${d.event.table} -> ${d.webhook.url} ${d.ok ? d.status : 'FAILED ' + (d.error ?? '')}`),
+    isNetworkExposed(config.host)
   )
-  if (config.webhooks?.length) await webhooks.start(config.webhooks)
-
   const cron = new CronService(db)
-  cron.start()
-
   const retention = new RetentionService(db, config.retention)
-  retention.start()
-
   const net = new NetService(db, config.netFetch, undefined, (d: NetDelivery) =>
     log(`[net] ${d.method} ${d.url} -> ${d.timedOut ? 'TIMEOUT' : d.error ? 'FAILED ' + d.error : d.status}`)
   )
-  net.start()
+
+  try {
+    await realtime.start()
+    cleanup.push(() => realtime.stop())
+    if (config.webhooks?.length) await webhooks.start(config.webhooks)
+    cleanup.push(() => webhooks.stopService())
+    cron.start()
+    cleanup.push(() => cron.stop())
+    retention.start()
+    cleanup.push(() => retention.stop())
+    net.start()
+    cleanup.push(() => net.stop())
+  } catch (e) {
+    await failStartup(e)
+  }
 
   const fnMap =
     config.functions instanceof Map
@@ -251,13 +310,22 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     }
 
     // studio SPA — serve the shell for every /_/* route so deep links work.
-    // no-cache: the whole app is inlined in this one document, so a stale
-    // cached copy means a stale studio — force revalidation on every load.
+    // no-cache forces revalidation (the whole app is inlined in this one
+    // document); the ETag then lets an unchanged studio return 304 instead of
+    // re-sending the full ~0.6 MB body. A strict CSP hardens the shell.
     if (path === '/_' || path.startsWith('/_/')) {
-      return new Response(ADMIN_HTML, {
-        status: 200,
-        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
-      })
+      const headers: Record<string, string> = {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-cache',
+        'content-security-policy': ADMIN_CSP,
+        'x-content-type-options': 'nosniff',
+        'x-frame-options': 'DENY',
+        etag: ADMIN_ETAG,
+      }
+      if (req.headers.get('if-none-match') === ADMIN_ETAG) {
+        return new Response(null, { status: 304, headers })
+      }
+      return new Response(ADMIN_HTML, { status: 200, headers })
     }
 
     // local email inbox (dev-only; mounted only when using the default mailer)
@@ -270,6 +338,14 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
       if (req.method === 'GET' || req.method === 'HEAD') {
         return withCors(await storage.handle(req, { role: 'anon', claims: null }, url))
       }
+    }
+    if (config.authEnabled === false && path.startsWith('/auth/v1')) {
+      return withCors(
+        new Response(JSON.stringify({ message: 'Auth service is disabled' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
     }
     if (
       (path === '/auth/v1/verify' || path === '/auth/v1/authorize' || path === '/auth/v1/callback') &&

@@ -8,7 +8,14 @@ export interface SupabaseProject {
   seedSql?: string
 }
 
-export async function loadSupabaseProject(projectDir: string): Promise<SupabaseProject> {
+/** Seed config from config.toml [db.seed] (enabled + explicit file paths). */
+export interface SeedOptions {
+  enabled?: boolean
+  /** Files relative to supabase/, applied in order. Defaults to ['seed.sql']. Globs are not expanded. */
+  paths?: string[]
+}
+
+export async function loadSupabaseProject(projectDir: string, seed: SeedOptions = {}): Promise<SupabaseProject> {
   const migrationsDir = join(projectDir, 'supabase', 'migrations')
   const migrations: MigrationFile[] = []
 
@@ -25,10 +32,17 @@ export async function loadSupabaseProject(projectDir: string): Promise<SupabaseP
   }
 
   let seedSql: string | undefined
-  try {
-    seedSql = await readFile(join(projectDir, 'supabase', 'seed.sql'), 'utf8')
-  } catch {
-    // no seed file
+  if (seed.enabled !== false) {
+    const paths = (seed.paths ?? ['seed.sql']).filter((p) => !/[*?[\]]/.test(p)) // globs unsupported; skip them
+    const parts: string[] = []
+    for (const rel of paths) {
+      try {
+        parts.push(await readFile(join(projectDir, 'supabase', rel), 'utf8'))
+      } catch {
+        // missing seed file — skip
+      }
+    }
+    if (parts.length) seedSql = parts.join('\n')
   }
 
   return { migrations, seedSql }

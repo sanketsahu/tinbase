@@ -88,6 +88,20 @@ export interface BackendConfig {
   logMailBody?: boolean
   /** Data-retention windows for the background cleanup sweep. */
   retention?: import('./retention/service.js').RetentionConfig
+  /** Max rows a single REST read returns (PostgREST db-max-rows; config.toml api.max_rows). Unlimited if unset. */
+  maxRows?: number
+  /** Default per-bucket file size limit in bytes (config.toml storage.file_size_limit). */
+  storageFileSizeLimit?: number
+  /** Buckets to create at boot if absent (config.toml storage.buckets.*). */
+  buckets?: BucketSeed[]
+  /** Force sign-out after this many seconds regardless of activity (config.toml auth.sessions.timebox). */
+  sessionTimeboxSeconds?: number
+  /** Sign out after this many seconds of inactivity (config.toml auth.sessions.inactivity_timeout). */
+  sessionInactivitySeconds?: number
+  /** Per-endpoint auth rate-limit rules (config.toml auth.rate_limit.*). Defaults applied when unset. */
+  authRateLimits?: Record<string, import('./auth/rate-limit.js').RateLimitRule>
+  /** Mount the auth service. Default true; config.toml auth.enabled = false turns /auth/v1 off. */
+  authEnabled?: boolean
 }
 
 export interface MailMessage {
@@ -103,12 +117,25 @@ export interface Mailer {
 
 export const DEFAULT_JWT_SECRET = 'super-secret-jwt-token-with-at-least-32-characters-long'
 
+/** tinbase package version, surfaced in health/root responses. Keep in sync with package.json. */
+export const TINBASE_VERSION = '0.9.0'
+
 /** Per-request execution context derived from apikey/Authorization headers. */
 export interface RequestContext {
   /** Postgres role to SET LOCAL: anon | authenticated | service_role */
   role: string
   /** Verified JWT claims (published to request.jwt.claims for RLS). */
   claims: JwtClaims | null
+}
+
+/** A bucket to create at boot (from config.toml [storage.buckets.<id>]). */
+export interface BucketSeed {
+  id: string
+  public: boolean
+  /** Per-bucket byte limit, or null for none. */
+  fileSizeLimit: number | null
+  /** Allowed MIME types, or null for any. */
+  allowedMimeTypes: string[] | null
 }
 
 export interface StorageDriver {

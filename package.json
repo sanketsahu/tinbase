@@ -27,7 +27,8 @@
     "test:watch": "vitest",
     "build:binary": "npm run build && bun build --compile src/cli.ts --outfile dist-bin/tinbase --external @electric-sql/pglite --define 'process.env.TINBASE_SINGLE_BINARY=\"1\"'",
     "prepublishOnly": "npm run build && npm test",
-    "build:admin": "cd admin-ui && npm run build",
+    "install:admin": "npm --prefix admin-ui ci || npm --prefix admin-ui install",
+    "build:admin": "npm run install:admin && npm --prefix admin-ui run build",
     "parity": "tsx parity/harness.ts"
   },
   "engines": {

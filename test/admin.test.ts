@@ -57,7 +57,9 @@ describe('admin', () => {
       method: 'POST',
       body: JSON.stringify({ query: 'select * from nope' }),
     })
-    expect(bad.status).toBe(400)
+    // SQLSTATE-mapped status (undefined_table → 404, PostgREST's mapping), with
+    // the pg error code carried through.
+    expect(bad.status).toBe(404)
     expect(((await bad.json()) as { code: string }).code).toBe('42P01')
   })
 

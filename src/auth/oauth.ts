@@ -12,6 +12,7 @@
  */
 import type { Database } from '../db/database.js'
 import { randomToken } from '../jwt.js'
+import { resolveRedirect } from './redirect.js'
 
 export interface OAuthProviderConfig {
   clientId: string
@@ -88,7 +89,9 @@ export class OAuthService {
     private db: Database,
     private siteUrl: string,
     configs: Record<string, OAuthProviderConfig>,
-    private fetchImpl: typeof fetch = fetch
+    private fetchImpl: typeof fetch = fetch,
+    private uriAllowList: string[] = [],
+    private enforceRedirectAllowList = false
   ) {
     for (const [name, cfg] of Object.entries(configs)) {
       this.providers.set(name, resolveProvider(name, cfg))
@@ -112,13 +115,16 @@ export class OAuthService {
     }
     const providerState = randomToken(16)
     const scopes = url.searchParams.get('scopes') || provider.scopes
+    // Validate the redirect target up front so the callback can trust the stored
+    // value — an unallowed target falls back to the site URL.
+    const redirectTo = resolveRedirect(url.searchParams.get('redirect_to'), this.siteUrl, this.uriAllowList, this.enforceRedirectAllowList)
     await this.db.query(
       `insert into auth.flow_state (provider, provider_state, redirect_to, code_challenge, code_challenge_method, expires_at)
        values ($1, $2, $3, $4, $5, now() + interval '10 minutes')`,
       [
         providerName,
         providerState,
-        url.searchParams.get('redirect_to') ?? this.siteUrl,
+        redirectTo,
         url.searchParams.get('code_challenge'),
         url.searchParams.get('code_challenge_method'),
       ]

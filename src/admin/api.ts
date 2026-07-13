@@ -5,6 +5,7 @@
  * bypassed by the service_role), so the studio uses the same paths an app does.
  */
 import { applyAuthSettingsPatch, saveAuthSettings, type AuthSettings } from '../auth/settings.js'
+import { statusForSqlState } from '../rest/errors.js'
 import { quoteIdent } from '../db/database.js'
 import type { Database } from '../db/database.js'
 import { signJwt } from '../jwt.js'
@@ -16,6 +17,25 @@ function json(status: number, body: unknown): Response {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   })
+}
+
+/**
+ * Map any thrown value to an admin error response. Postgres errors get their
+ * SQLSTATE-derived status (via PostgREST's mapping) and carry code/detail/hint;
+ * everything else is a 500. The `error` field stays a plain string so existing
+ * studio callers keep working.
+ */
+function adminError(e: unknown): Response {
+  const pg = e as { code?: string; message?: string; detail?: string; hint?: string }
+  if (pg && typeof pg.code === 'string' && /^[0-9A-Z]{5}$/.test(pg.code)) {
+    return json(statusForSqlState(pg.code), {
+      error: pg.message ?? 'database error',
+      code: pg.code,
+      detail: pg.detail ?? null,
+      hint: pg.hint ?? null,
+    })
+  }
+  return json(500, { error: e instanceof Error ? e.message : String(e) })
 }
 
 /** Built-in edge-function vars tinbase injects — read-only, can't be edited/deleted. */
@@ -103,7 +123,7 @@ export class AdminApi {
       }
       return json(404, { error: `unknown admin endpoint: ${path}` })
     } catch (e) {
-      return json(500, { error: e instanceof Error ? e.message : String(e) })
+      return adminError(e)
     }
   }
 
@@ -255,21 +275,14 @@ export class AdminApi {
     }
     const started = Date.now()
     try {
-      if (role) {
-        const claims = JSON.stringify(body.claims ?? { role }).replace(/'/g, "''")
-        await this.db.query(`select set_config('request.jwt.claims', '${claims}', false)`)
-        await this.db.query(`set role ${quoteIdent(role)}`)
-      }
-      let res
-      try {
-        res = await this.db.query(body.query)
-      } finally {
-        if (role) {
-          // always restore the superuser session, even when the query throws
-          await this.db.query('reset role').catch(() => {})
-          await this.db.query(`select set_config('request.jwt.claims', '', false)`).catch(() => {})
-        }
-      }
+      // When a role is requested ("run as anon/authenticated"), execute inside a
+      // transaction with SET LOCAL role + request.jwt.claims — the same mechanism
+      // the REST layer uses — so role/claims never leak onto the shared connection
+      // between concurrent requests. The claims value is passed as a bound
+      // parameter, not interpolated.
+      const res = role
+        ? await this.db.withContext({ role, claims: body.claims ?? { role } }, (q) => q(body.query!))
+        : await this.db.query(body.query)
       this.db.invalidateSchemaCache()
       return json(200, {
         rows: res.rows.slice(0, 2000),
@@ -278,8 +291,7 @@ export class AdminApi {
         ms: Date.now() - started,
       })
     } catch (e) {
-      const pg = e as { message?: string; code?: string; detail?: string; hint?: string }
-      return json(400, { error: pg.message, code: pg.code, detail: pg.detail, hint: pg.hint })
+      return adminError(e)
     }
   }
 
@@ -338,8 +350,7 @@ export class AdminApi {
       this.db.invalidateSchemaCache()
       return json(200, { ok: true })
     } catch (e) {
-      const pg = e as { message?: string; code?: string; hint?: string }
-      return json(400, { error: pg.message, code: pg.code, hint: pg.hint })
+      return adminError(e)
     }
   }
 
@@ -350,9 +361,10 @@ export class AdminApi {
     if (!table || !name) return json(400, { error: 'table and name are required' })
     try {
       await this.db.query(`drop policy ${quoteIdent(name)} on ${quoteIdent(schema)}.${quoteIdent(table)}`)
+      this.db.invalidateSchemaCache()
       return json(200, { ok: true })
     } catch (e) {
-      return json(400, { error: (e as { message?: string }).message })
+      return adminError(e)
     }
   }
 
