@@ -30,11 +30,11 @@ function EngineCard({
         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${BADGE_TONE[tone]}`}>{badge}</span>
       </div>
       <p className="mt-3 text-sm font-medium leading-snug text-fg">{tagline}</p>
-      <dl className="mt-4 space-y-2 text-sm">
+      <dl className="mt-4 grid grid-cols-[6rem_1fr] items-baseline gap-x-5 gap-y-2.5 text-sm">
         {facts.map((f) => (
-          <div key={f.label} className="flex gap-3">
-            <dt className="w-[4.5rem] shrink-0 text-xs uppercase tracking-wide text-subtle">{f.label}</dt>
-            <dd className="flex-1 leading-relaxed text-muted">{f.value}</dd>
+          <div key={f.label} className="contents">
+            <dt className="text-xs uppercase tracking-wide text-subtle">{f.label}</dt>
+            <dd className="leading-relaxed text-muted">{f.value}</dd>
           </div>
         ))}
       </dl>
@@ -44,7 +44,7 @@ function EngineCard({
 
 export function EngineCards() {
   return (
-    <div className="mt-6 grid gap-4 sm:grid-cols-2">
+    <div className="mt-6 space-y-4">
       <EngineCard
         name="native"
         badge="Default · macOS/Linux"
