@@ -136,7 +136,7 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     oauthProviders: config.oauthProviders,
     oauthFetch: config.oauthFetch,
   })
-  const storage = new StorageHandler(db, config.storageDriver ?? new MemoryStorageDriver(), { jwtSecret })
+  const storage = new StorageHandler(db, config.storageDriver ?? new MemoryStorageDriver(), { jwtSecret, log })
   const realtime = new RealtimeEngine(db, jwtSecret)
   await realtime.start()
 
@@ -232,7 +232,12 @@ export async function createBackend(config: BackendConfig = {}): Promise<Tinbase
     }
 
     // public endpoints that skip apikey checks
-    if (path.startsWith('/storage/v1/object/public/') || path.startsWith('/storage/v1/object/sign/')) {
+    if (
+      path.startsWith('/storage/v1/object/public/') ||
+      path.startsWith('/storage/v1/object/sign/') ||
+      path.startsWith('/storage/v1/render/image/public/') ||
+      path.startsWith('/storage/v1/render/image/sign/')
+    ) {
       if (req.method === 'GET' || req.method === 'HEAD') {
         return withCors(await storage.handle(req, { role: 'anon', claims: null }, url))
       }

@@ -44,7 +44,7 @@ Until the harness exists, coverage numbers below are our own honest estimates.
 | --- | --- | --- |
 | Database (PostgREST) | ~95% | aggregates *within embeds*; error-shape parity (harness) |
 | Auth (GoTrue) | ~90% | SSO, phone auth |
-| Storage | ~90% | image transforms (needs a bundled image codec) |
+| Storage | ~90% | image transforms served as no-op (real resize needs a codec) |
 | Realtime | ~90% | per-row DELETE RLS (WALRUS) |
 | Edge Functions | ~85% | remote-import fetch needs network at first run |
 | Studio | ~80% | table/column designer UI |
@@ -107,8 +107,10 @@ in the theseus native Postgres binaries or this PGlite build. Two tracks:
 - [x] Storage resumable (TUS) uploads — TUS 1.0.0 creation, creation-with-upload,
       core PATCH, and termination; upload state held in memory (resumes within a
       server session), finalized through the normal object-write path
-- [ ] Storage image transformations — deferred: real resize/re-encode needs a
-      bundled image codec, a poor fit for the no-deps / browser-capable model
+- [ ] Storage image transformations — interim **no-op**: transform requests
+      (`/render/image/{public,authenticated,sign}/…`) serve the *original* object
+      (with a one-time warning) so apps don't 404. Real resize/re-encode still
+      needs a bundled image codec (a poor fit for the no-deps / browser model)
 - [x] PostgREST aggregates-in-select (`count()`/`sum()`/`avg()`/`max()`/`min()` +
       implicit group by), `.explain()` (text/json plans), `.csv()`, and to-one /
       to-many / m2m spread embeds — top-level aggregates only (not yet within embeds)

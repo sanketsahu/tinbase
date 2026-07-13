@@ -9,6 +9,7 @@ import type { RequestContext, StorageDriver } from '../types.js'
 
 export interface StorageConfig {
   jwtSecret: string
+  log?: (message: string) => void
 }
 
 interface ObjectRow {
@@ -77,6 +78,7 @@ const TUS_VERSION = '1.0.0'
 
 export class StorageHandler {
   private tusUploads = new Map<string, TusUpload>()
+  private warnedTransform = false
 
   constructor(
     private db: Database,
@@ -105,6 +107,26 @@ export class StorageHandler {
       // ── resumable (TUS) uploads: /upload/resumable[/:id] ──
       if (parts[0] === 'upload' && parts[1] === 'resumable') {
         return await this.handleTus(req, ctx, url, parts.slice(2).join('/'), method)
+      }
+
+      // ── image transforms: /render/image/{authenticated,public,sign}/:bucket/:path ──
+      // Not supported yet — serve the ORIGINAL object as a no-op (with a warning)
+      // rather than 404, so apps requesting a transform still get their image.
+      if (parts[0] === 'render' && parts[1] === 'image' && parts.length >= 5) {
+        this.warnTransformUnsupported()
+        const kind = parts[2]
+        const bucket = parts[3]
+        const key = parts.slice(4).join('/')
+        if (kind === 'public' && (method === 'GET' || method === 'HEAD')) {
+          return await this.downloadPublic(bucket, key, method === 'HEAD')
+        }
+        if (kind === 'authenticated' && (method === 'GET' || method === 'HEAD')) {
+          return await this.download(ctx, bucket, key, method === 'HEAD')
+        }
+        if (kind === 'sign' && method === 'GET') {
+          return await this.redeemSignedUrl(url, bucket, key)
+        }
+        return storageError(404, 'not_found', `unknown render endpoint: ${rest}`)
       }
 
       if (parts[0] !== 'object') return storageError(404, 'not_found', `unknown storage endpoint: ${rest}`)
@@ -300,6 +322,16 @@ export class StorageHandler {
       }
       throw e
     }
+  }
+
+  /** Warn once that image transforms are unsupported (the original is served). */
+  private warnTransformUnsupported(): void {
+    if (this.warnedTransform) return
+    this.warnedTransform = true
+    this.config.log?.(
+      '[storage] image transformations are not supported yet — serving the original object unchanged ' +
+        '(this warning is shown once per process).'
+    )
   }
 
   /** Insert (or upsert) the object row and write its bytes to the driver. */

@@ -265,3 +265,28 @@ describe('resumable (TUS) uploads', () => {
     expect(bad.status).toBe(409)
   })
 })
+
+describe('image transforms (no-op until supported)', () => {
+  const TEXT = 'not really a png but bytes are bytes'
+  beforeAll(async () => {
+    await env.admin.storage
+      .from('avatars')
+      .upload('img/pic.bin', new TextEncoder().encode(TEXT), { contentType: 'application/octet-stream', upsert: true })
+  })
+
+  it('serves the original object when a transform is requested via download()', async () => {
+    const dl = await env.admin.storage
+      .from('avatars')
+      .download('img/pic.bin', { transform: { width: 100, height: 100 } })
+    expect(dl.error).toBeNull()
+    expect(await dl.data!.text()).toBe(TEXT)
+  })
+
+  it('serves the original via a public transform URL', async () => {
+    const { data } = env.admin.storage.from('avatars').getPublicUrl('img/pic.bin', { transform: { width: 50 } })
+    expect(data.publicUrl).toContain('/render/image/public/')
+    const res = await env.backend.fetch(new Request(data.publicUrl))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe(TEXT)
+  })
+})
